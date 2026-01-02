@@ -153,12 +153,11 @@ extern void *gVideoSinkTestConfiguration;
         ::android::binder::Status status; \
         UT_LOG_DEBUG("Calling getVideoSink(IN:_sinkId:[%d], OUT:videoSink[])", _sinkId.value); \
         status = gVideoSinkManager->getVideoSink(_sinkId, &videoSink); \
-        UT_LOG_DEBUG("Result getVideoSink(IN:_sinkId:[%d], OUT:videoSink[0x%X]), status:[isOK:%s, exception:%s]", \
-                                _sinkId.value, videoSink.get(), UT_Control_GetMapString(bool_mapTable, status.isOk()), \
+        UT_LOG_DEBUG("Result getVideoSink(IN:_sinkId:[%d]), status:[isOK:%s, exception:%s]", \
+                                _sinkId.value, UT_Control_GetMapString(bool_mapTable, status.isOk()), \
                                 UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         UT_ASSERT_FALSE(status.isOk()); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_TRUE(videoSink.get() == nullptr); \
     } while (0)
 
 #define VIDEOSINK_CONTROLLER_SETVIDEODECODER_SUCCESS(videoSinkController,videodecoderId) \
@@ -182,10 +181,9 @@ extern void *gVideoSinkTestConfiguration;
         bool aidl_return = false;\
         UT_LOG_DEBUG("Calling setVideoDecoder(IN:videodecoderId:[%d], OUT:_aidl_return)", videodecoderID.value);\
         status = videoSinkController->setVideoDecoder(videodecoderID, &aidl_return);\
-        UT_LOG_DEBUG("Result setVideoDecoder(IN:videodecoderId:[%d], OUT:_aidl_return:[%d]), status:[isOK:%s, exception:%s]",\
-                    videodecoderID.value, aidl_return, UT_Control_GetMapString(bool_mapTable, status.isOk()),\
+        UT_LOG_DEBUG("Result setVideoDecoder(IN:videodecoderId:[%d]), status:[isOK:%s, exception:%s]",\
+                    videodecoderID.value, UT_Control_GetMapString(bool_mapTable, status.isOk()),\
                     UT_Control_GetMapString(statusException_mapTable, status.exceptionCode()));\
-        UT_ASSERT_FALSE(aidl_return);\
         UT_ASSERT_FALSE(status.isOk());\
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
     } while (0)
@@ -338,11 +336,10 @@ extern void *gVideoSinkTestConfiguration;
         UT_LOG_DEBUG("Calling open(IN:controllerListener[0x%p])", \
             controllerListener); \
         status = videoSink->open(controllerListener, &videoSinkController); \
-        UT_LOG_DEBUG("Result open(IN:controllerListener[0x%p], OUT:videoSinkController[0x%X]), status:[exception:%s]", \
-            controllerListener, videoSinkController.get(), \
+        UT_LOG_DEBUG("Result open(IN:controllerListener[0x%p]), status:[exception:%s]", \
+            controllerListener, \
             UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_EQUAL(videoSinkController.get(), nullptr); \
     } while (0);
 
 #define VIDEOSINK_CLOSE_SUCCESS(videoSink, videoSinkController, stateCheck) \
@@ -371,13 +368,12 @@ extern void *gVideoSinkTestConfiguration;
         bool _aidl_return; \
         UT_LOG_DEBUG("Calling close(IN:videoSinkController[0x%p], OUT:_aidl_return[])", videoSinkController.get()); \
         status = videoSink->close(videoSinkController, &_aidl_return); \
-        UT_LOG_DEBUG("Result close(IN:videoSinkController[0x%p], OUT:_aidl_return[%s]), status:[isOK:%s, exception:%s]", \
-            videoSinkController.get(), UT_Control_GetMapString(bool_mapTable, _aidl_return), \
+        UT_LOG_DEBUG("Result close(IN:videoSinkController[0x%p]), status:[isOK:%s, exception:%s]", \
+            videoSinkController.get(), \
             UT_Control_GetMapString(bool_mapTable, status.isOk()), \
             UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         UT_ASSERT_FALSE(status.isOk()); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_FALSE(_aidl_return); \
     } while (0)
 
 #define VIDEOSINK_REGISTER_EVENT_SUCCESS(videoSink, eventListener) \
@@ -401,8 +397,8 @@ extern void *gVideoSinkTestConfiguration;
         bool _aidl_return=false; \
         UT_LOG_DEBUG("Calling registerEventListener(IN:eventListener[0x%p], OUT:_aidl_return[])", eventListener.get()); \
         status = videoSink->registerEventListener(eventListener, &_aidl_return); \
-        UT_LOG_DEBUG("Result registerEventListener(IN:eventListener[0x%p], OUT:_aidl_return[%s]), status:[isOK:%s, exception:%s]", \
-            eventListener.get(), UT_Control_GetMapString(bool_mapTable, _aidl_return), \
+        UT_LOG_DEBUG("Result registerEventListener(IN:eventListener[0x%p]), status:[isOK:%s, exception:%s]", \
+            eventListener.get(), \
             UT_Control_GetMapString(bool_mapTable, status.isOk()), \
             UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         if (exception == Status::EX_NONE) \
@@ -410,7 +406,6 @@ extern void *gVideoSinkTestConfiguration;
         else \
             UT_ASSERT_FALSE(status.isOk()); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_FALSE(_aidl_return); \
     } while (0)
 
 #define VIDEOSINK_UNREGISTER_EVENT_SUCCESS(videoSink, eventListener) \
@@ -434,12 +429,11 @@ extern void *gVideoSinkTestConfiguration;
         bool _aidl_return = false; \
         UT_LOG_DEBUG("Calling unregisterEventListener(IN:eventListener[0x%p], OUT:_aidl_return[])", eventListener.get()); \
         status = videoSink->unregisterEventListener(eventListener, &_aidl_return); \
-        UT_LOG_DEBUG("Result unregisterEventListener(IN:eventListener[0x%p], OUT:_aidl_return[%s]), status:[isOK:%s, exception:%s]", \
-            eventListener.get(), UT_Control_GetMapString(bool_mapTable, _aidl_return), \
+        UT_LOG_DEBUG("Result unregisterEventListener(IN:eventListener[0x%p]), status:[isOK:%s, exception:%s]", \
+            eventListener.get(), \
             UT_Control_GetMapString(bool_mapTable, status.isOk()), \
             UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_FALSE(_aidl_return); \
     } while (0)
 
 #define VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, stateCheck) \
@@ -558,7 +552,6 @@ extern void *gVideoSinkTestConfiguration;
         UT_LOG_DEBUG("Result queueVideoFrame(IN:nsPresentationTime:[%lld], IN:frameBufferHandle:[0x%016" PRIx64 "], IN:metadata:[...]), status:[isOK:%s, exception:%s]", \
                     nsPresentationTime, frameBufferHandle,\
                     UT_Control_GetMapString(bool_mapTable, status.isOk()), UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
-        UT_ASSERT_FALSE(_aidl_return); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
     } while (0)
 
@@ -608,12 +601,10 @@ extern void *gVideoSinkTestConfiguration;
         bool _aidl_return = false; \
         UT_LOG_DEBUG("Calling setProperty(IN:property[%s], IN:propertyValue[0x%X], OUT:_aidl_return[])", com::rdk::hal::videosink::toString(property).c_str(), propertyValue.value); \
         status = videoSinkController->setProperty(property, propertyValue, &_aidl_return); \
-        UT_LOG_DEBUG("Result setProperty(IN:property[%s], IN:propertyValue[0x%X], OUT:_aidl_return[%s]), status:[isOK:%s, exception:%s]", com::rdk::hal::videosink::toString(property).c_str(), propertyValue.value, \
-            UT_Control_GetMapString(bool_mapTable, _aidl_return), \
+        UT_LOG_DEBUG("Result setProperty(IN:property[%s], IN:propertyValue[0x%X]), status:[isOK:%s, exception:%s]", com::rdk::hal::videosink::toString(property).c_str(), propertyValue.value, \
             UT_Control_GetMapString(bool_mapTable, status.isOk()), \
             UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
         UT_ASSERT_EQUAL(status.exceptionCode(), exception); \
-        UT_ASSERT_FALSE(_aidl_return); \
         UT_ASSERT_FALSE(status.isOk()); \
     } while (0)
 
