@@ -70,8 +70,6 @@ using namespace std;
 /* Test class registration with UT_Core */
 UT_ADD_TEST_TO_GROUP(VTS_L3_VideoSink, UT_TESTS_L3)
 
-static const char *gModuleName = "IVideoSinkManager";
-static const char *gVideoDecoderModuleName = "IVideoDecoderManager";
 const char *gTestGroup = "L3";
 IAVBufferHelper* gAVbufferHelper;
 

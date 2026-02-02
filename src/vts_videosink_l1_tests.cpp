@@ -1128,8 +1128,8 @@ UT_ADD_TEST(VTS_L1_VideoSink, setProperty_neg) {
  * **Test Procedure:**@n
  * | Variation / Step | Description | Test Data | Expected Result | Notes |
  * | :----: | --------- | ---------- |-------------- | ----- |
- * | 01 | Retrieve the count of video sinks from the profile. | videosinkCount = UT_KVP_PROFILE_GET_LIST_COUNT(IVideosinkManager.IVideosink) | videosinkCount > 0 | Should be successful |
- * | 02 | Iterate over each video sink ID retrieved from the profile. | videosinkId.value = UT_KVP_PROFILE_GET_UINT32(IVideosinkManager.IVideosink.<index>.<index>, i) | N/A | Should be successful |
+ * | 01 | Retrieve the count of video sinks from the profile. | videosinkCount = UT_KVP_PROFILE_GET_LIST_COUNT(VIDEOSINKMGR_IVIDEODECODER) | videosinkCount > 0 | Should be successful |
+ * | 02 | Iterate over each video sink ID retrieved from the profile. | videosinkId.value = UT_KVP_PROFILE_GET_UINT32(VIDEOSINKMGR_IVIDEODECODER.<index>.<index>, i) | N/A | Should be successful |
  * | 03 | Ensure each controller is in the READY state before setting the sink. | controller->getState() | State::READY | Should be successful |
  * | 04 | Call the setVideosink API with the videosinkId and check the return status. | videosinkId = value, aidl_return = false | status.isOk() = true, aidl_return = true | Should Pass |
  * | 05 | Log the result of the setVideosink API call. | N/A | N/A | Should be successful |
@@ -1140,7 +1140,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setProperty_neg) {
     sp<IVideoSink> videoSink;
 
     // Retrieve videosinkId from YAML using macros
-    std::string videodecoderCount_path = "IVideoSinkManager.IVideoDecoder";
+    std::string videodecoderCount_path = VIDEOSINKMGR_IVIDEODECODER;
     int videodecoderCount = UT_KVP_PROFILE_GET_LIST_COUNT(videodecoderCount_path.c_str());
     UT_ASSERT_GREATER(videodecoderCount, 0);
     /* Get the Video sink IDs */
@@ -1186,7 +1186,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setProperty_neg) {
  * **Test Procedure:**@n
  * | Variation / Step | Description | Test Data | Expected Result | Notes |
  * | :----: | --------- | ---------- |-------------- | ----- |
- * | 01 | Retrieve videosinkIds from YAML using macros | count = UT_KVP_PROFILE_GET_LIST_COUNT(IVideosinkManager.IVideosink) | Should be successful | Should be successful |
+ * | 01 | Retrieve videosinkIds from YAML using macros | count = UT_KVP_PROFILE_GET_LIST_COUNT(VIDEOSINKMGR_IVIDEODECODER) | Should be successful | Should be successful |
  * | 02 | Sort the videosinkIds to find the least and highest values | videosinkIds | Should be successful | Should be successful |
  * | 03 | Test with invalid video sink ID (less than least value) | invalidId.value = leastValue - 1 | aidlReturn = false, status.isOk() = true | Should Pass |
  * | 04 | Test with invalid video sink ID (greater than highest value) | invalidId.value = highestValue + 1 | aidlReturn = false, status.isOk() = true | Should Pass |
@@ -1198,7 +1198,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg) {
     // Retrieve videosinkIds from YAML using macros
     std::vector<int32_t> videodecoderIds;
 
-    std::string videodecoderCount_path = "IVideoSinkManager.IVideoDecoder";
+    std::string videodecoderCount_path = VIDEOSINKMGR_IVIDEODECODER;
 
     std::vector<IVideoSink::Id> sinkIds;
     sp<IVideoSink> videoSink;
@@ -1296,7 +1296,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, getVideodecoder_pos)
     // Retrieve videosinkIds from YAML using macros
     std::vector<int32_t> videodecoderIds;
     videodecoderIds.push_back(IVideoDecoder::Id::UNDEFINED);
-    std::string videodecoderCount_path = "IVideoSinkManager.IVideoDecoder";
+    std::string videodecoderCount_path = VIDEOSINKMGR_IVIDEODECODER;
     int count = UT_KVP_PROFILE_GET_LIST_COUNT(videodecoderCount_path.c_str());
 
     for (int32_t i = 0; i < count; ++i)

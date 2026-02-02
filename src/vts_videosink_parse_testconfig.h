@@ -72,9 +72,9 @@
 
 #define VIDEO_SINK_TEST_CONFIG_PATH "./videosink_test_configuration/vts_l3_VideoSink_test_config.yaml"
 #define VIDEO_SINK_STREAM_CONFIG_PATH "./videosink_test_configuration/vts_stream_list.yaml"
-#define VIDEO_SINK_STREAM_DOWNLOAD_PATH "IVideoSinkManager.stream_download_path"
-#define VIDEO_SINK_STREAM_INPUT_PATH "IVideoSinkManager.input_streams_path"
-#define VIDEO_SINK_STREAM_REF_PATH "IVideoSinkManager.reference_streams_path"
+#define VIDEO_SINK_STREAM_DOWNLOAD_PATH "videosink.stream_download_path"
+#define VIDEO_SINK_STREAM_INPUT_PATH "videosink.input_streams_path"
+#define VIDEO_SINK_STREAM_REF_PATH "videosink.reference_streams_path"
 
 struct frameMetadata_t {
     std::string name;

@@ -76,7 +76,9 @@ extern std::vector<int32_t> gVideosinks_hfp;
 extern std::vector<int32_t> gAvailableVideosinks_hfp;
 extern std::vector<int32_t> gAvailableVideodecoders_hfp;
 
-#define VIDEOSINKMGR_IVIDEOSINK "IVideoSinkManager.IVideoSink"
+#define VIDEOSINKMGR_IVIDEOSINK "videosink.IVideoSink"
+#define VIDEOSINKMGR_SINK_AVAILABLE "videosink.availableSinks"
+#define VIDEOSINKMGR_IVIDEODECODER "videosink.IVideoDecoder"
 
 UT_status_t vts_videosink_parseVideoSinkHFP();
 
