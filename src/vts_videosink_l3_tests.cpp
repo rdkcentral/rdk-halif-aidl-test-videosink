@@ -96,6 +96,7 @@ public:
     sp<IAVBuffer> mAVBufferManager;
     IAVBufferHelper* mAVbufferHelper;
     bool mIsTunnelSupported = false;
+    bool mIsNonTunnelSupported = false;
 
     const decoder_t* getDecoderHfpCapabilities(const IVideoDecoder::Id& decoderId) const
     {
@@ -330,11 +331,13 @@ public:
             if (opModeStatus.isOk() && opModeStatus.exceptionCode() == Status::EX_NONE)
             {
                 mIsTunnelSupported = std::find(supportedModes.begin(), supportedModes.end(), videodecoder::OperationalMode::TUNNELLED) != supportedModes.end();
+                mIsNonTunnelSupported = std::find(supportedModes.begin(), supportedModes.end(), videodecoder::OperationalMode::NON_TUNNELLED) != supportedModes.end();
             }
             else
             {
                 mIsTunnelSupported = false;
-                UT_LOG_WARNING("Failed to query decoder operational modes. Tunnel tests will be skipped.");
+                mIsNonTunnelSupported = false;
+                UT_LOG_WARNING("Failed to query decoder operational modes. Tunnel and non-tunnel tests will be skipped.");
             }
 
             android::ProcessState::self()->startThreadPool();
@@ -448,6 +451,9 @@ public:
                                        decoderControlListener, mAVBufferManager, decoderId, clockId, decoderConfig,
                                        isClockInUse);
 
+                decoderControlListener->resetQueues();
+                decoderEventListener->resetQueues();
+
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
                 std::thread decodeThread(&videoDecoderTest::run, &decodeTest, true);
@@ -553,6 +559,9 @@ public:
                                     decoderControlListener, mAVBufferManager, decoderId, clockId,
                                     decoderConfig, isClockInUse);
 
+                decoderControlListener->resetQueues();
+                decoderEventListener->resetQueues();
+
                 sinkThreads.emplace_back(&VideoSinkTest::run, sinkTest.get(), tunnel);
                 sinkTests.push_back(std::move(sinkTest));
             }
@@ -621,6 +630,12 @@ public:
         if (isTunnel && !mIsTunnelSupported)
         {
             GTEST_SKIP() << "Tunnel mode is not supported by decoder capabilities";
+            return;
+        }
+
+        if (!isTunnel && !mIsNonTunnelSupported)
+        {
+            GTEST_SKIP() << "Non-tunnel mode is not supported by decoder capabilities";
             return;
         }
 
