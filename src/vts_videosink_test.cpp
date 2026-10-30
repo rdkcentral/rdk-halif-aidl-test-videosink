@@ -204,7 +204,8 @@ void VideoSinkTest::validateCallbacks()
     if (!mIsClockInUse)
     {
         UT_LOG_INFO("Waiting for AVClock onPrimed event");
-        bool primedStatus = mClockCtrlListener->waitForPrimedEvent(std::chrono::seconds(5));
+        bool primedStatus = mClockCtrlListener->waitForPrimedEvent(
+            std::chrono::seconds(5), threadtype::video);
         UT_ASSERT_TRUE(primedStatus);
     }
 
@@ -433,6 +434,19 @@ bool VideoSinkTest::validateSinkBackPressure(int64_t bufferHandle, int64_t pts, 
     return queueAgainSucess;
 }
 
+bool VideoSinkTest::waitForDecoderEndOfStream()
+{
+    if (mDecoderControllerListener->waitForEndOfStream(1, std::chrono::milliseconds(0)))
+    {
+        return true;
+    }
+
+    UT_LOG_ERROR("[SinkID: %d] Neither a decoded frame nor decoder EOS was received within %d ms",
+                 mSinkId.value, 5000);
+    UT_ASSERT_TRUE(false);
+    return false;
+}
+
 void VideoSinkTest::videoSinkNonTunnelMode()
 {
     try
@@ -440,7 +454,6 @@ void VideoSinkTest::videoSinkNonTunnelMode()
         UT_LOG_INFO("[SinkID: %d] Start of Testing Stream: %s", mSinkId.value, mTestConfiguration.input.c_str());
         DecodedVideoFrame_t decodedFrame;
         uint32_t frameDurationMs = 50; // Default to 50 ms if frame rate is not available
-        int32_t queuedFrames = 0;
 
         /*Reset the Flush, EOS, Underflow and Resume Counts*/
         mVideoSinkControlListener->resetFirstFrameRendered();
@@ -462,9 +475,23 @@ void VideoSinkTest::videoSinkNonTunnelMode()
         mFirstFramePTS = mTestConfiguration.sink_discardFramesUntilPts;
         mFrameCount = 0;
 
-        while ((mTestConfiguration.no_of_frames != queuedFrames) &&
-               mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
+        while (true)
         {
+            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
+            {
+                if (!waitForDecoderEndOfStream())
+                {
+                    tearDownVideoSink();
+                    return;
+                }
+
+                // EOS can arrive immediately before the final decoded frame is queued.
+                if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(0)))
+                {
+                    break;
+                }
+            }
+
             int64_t pts = decodedFrame.framePTS;
             int64_t bufferHandle = decodedFrame.frameAVBufferHandle;
 
@@ -527,7 +554,6 @@ void VideoSinkTest::videoSinkNonTunnelMode()
 
             if(queueSucess)
             {
-                queuedFrames++;
                 // Sleep for the frame duration to simulate real-time frame arrival
                 std::this_thread::sleep_for(std::chrono::milliseconds(frameDurationMs));
             }
@@ -542,8 +568,16 @@ void VideoSinkTest::videoSinkNonTunnelMode()
             mSignalEOSPTS = pts;
 
             /* Check for end-of-stream */
-            if(mTestConfiguration.eosPts >= 0 && pts >= static_cast<int64_t>(mTestConfiguration.eosPts))
+            if(mTestConfiguration.eosPts >= 0 && pts == static_cast<int64_t>(mTestConfiguration.eosPts))
             {
+                if (!mDecoderControllerListener->waitForEndOfStream(1, std::chrono::milliseconds(5000)))
+                {
+                    UT_LOG_ERROR("[SinkID: %d] Decoder EOS was not received before sink EOS", mSinkId.value);
+                    UT_ASSERT_TRUE(false);
+                    tearDownVideoSink();
+                    return;
+                }
+
                 VIDEOSINK_SIGNAL_EOS_SUCCESS(mVideoSinkController);
 
                 /* After EOS signal, any further attempts to queue frames should fail */
@@ -604,8 +638,23 @@ void VideoSinkTest::videoSinkTunnelMode()
         mFirstFramePTS = -1;
         mFrameCount = 0;
 
-        while (mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
+        while (true)
         {
+            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
+            {
+                if (!waitForDecoderEndOfStream())
+                {
+                    tearDownVideoSink();
+                    return;
+                }
+
+                // EOS can arrive immediately before the final decoded frame is queued.
+                if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(0)))
+                {
+                    break;
+                }
+            }
+
             int64_t pts = decodedFrame.framePTS;
 
             // Use fully qualified name to avoid ambiguity

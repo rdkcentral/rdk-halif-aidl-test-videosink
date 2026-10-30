@@ -149,6 +149,7 @@ private:
     void tearDownClock();
     void validateCallbacks();
     void validateMetrics();
+    bool waitForDecoderEndOfStream();
     void validateUnderflowResume(int64_t pts);
     void setupVideoSink();
     void tearDownVideoSink();
