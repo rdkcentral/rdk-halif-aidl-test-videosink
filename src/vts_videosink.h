@@ -255,7 +255,7 @@ extern void *gVideoSinkTestConfiguration;
                 break; \
             case PropertyValue::Value::Tag::stringValue: \
                 UT_LOG_INFO("Result getProperty(IN:property[%s], OUT:propertyValue[%s]), status:[isOK:%s, exception:%s]", videosink::toString(property).c_str(), \
-                propertyValue->value->get<PropertyValue::Value::Tag::stringValue>().string(), \
+                propertyValue->value->get<PropertyValue::Value::Tag::stringValue>().c_str(), \
                 UT_Control_GetMapString(bool_mapTable, status.isOk()), \
                 UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
                 break; \
@@ -636,6 +636,7 @@ extern void *gVideoSinkTestConfiguration;
         UT_ASSERT_EQUAL(status.exceptionCode(), Status::EX_NONE); \
         UT_ASSERT_TRUE(result); \
         UT_ASSERT_TRUE(status.isOk()); \
+        result = status.isOk() && result; \
     } while (0)
 
 
@@ -849,7 +850,7 @@ public:
     // Utility functions: End of stream (EOS)
     void resetEos();
     std::vector<int64_t> getEosPTS();
-    bool waitForEosEvent(std::chrono::milliseconds timeout);
+    bool waitForEosEvent(std::chrono::milliseconds timeout, size_t expectedCount = 1);
 
     // Utility functions: Frame buffer available
     void resetFrameBufferAvailable();
@@ -945,7 +946,7 @@ public:
     // Utility functions: End of stream (EOS)
     void resetEos();
     std::vector<int64_t> getEosPTS();
-    bool waitForEosEvent(std::chrono::milliseconds timeout);
+    bool waitForEosEvent(std::chrono::milliseconds timeout, size_t expectedCount = 1);
 
     // Utility functions: Frame buffer available
     void resetFrameBufferAvailable();

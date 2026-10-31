@@ -25,7 +25,7 @@
 
 This document provides an overview of the testing requirements for the Video Sink module. It outlines the scope of testing, objectives, testing levels and approaches, specific test requirements.
 
-- Video Sink Interface Definitions - [Video Sink HAL](https://github.com/rdkcentral/rdk-halif-aidl/tree/0.22.0/videosink/current/com/rdk/hal/videosink)
+- Video Sink Interface Definitions - [Video Sink HAL](https://github.com/rdkcentral/rdk-halif-aidl/tree/0.23.0/videosink/0.3.0.0/com/rdk/hal/videosink)
 
 - Video Sink Overview - [Video Sink Overview](https://wiki.rdkcentral.com/display/RDKHAL/Video+Sink)
 
@@ -52,6 +52,33 @@ Decoded Video frames are supplied to the Video Sink queue during non-tunnel mode
 
 Av buffer provides frames buffers to the Video sink during non-tunnel testing, which necessitates a pre-validated AVBuffer module. Therefore, the AVBuffer must successfully pass VTS L1, L2, and L3 testing before being used in the Video Sink tests
 
+### AIDL 0.23.0 platform-selected playback
+
+L3 tests are named by operation, without tunnel/non-tunnel or secure/non-secure
+variants. Each sink is associated with its decoder using `setVideoDecoder()`
+and started before decoding begins. After the decoder reaches `STARTED`, the
+test queries `IVideoDecoder.getCurrentOperationalMode()`.
+
+Secure input is used only when both the decoder and sink advertise
+`Capabilities.supportsSecure`; otherwise the decoder is opened non-secure.
+Sequential cases exercise every supported decoder/sink combination. Concurrent
+cases select independent decoder/sink/clock pairs and check each heap they use.
+
+- `NON_TUNNELLED`: validate each output handle, then pass it to `queueVideoFrame()`.
+  Ownership transfers only on acceptance. Rejected handles are freed by the client;
+  accepted buffers are freed by the sink.
+- `TUNNELLED`: require `-1` in `onFrameOutput()`. Do not call `queueVideoFrame()`;
+  the vendor delivers frames internally and owns buffer cleanup.
+- Both paths validate presentation callbacks, EOS sequencing, flush/discard
+  operations and metrics. Middleware signals sink EOS after decoder EOS.
+- Client queue back-pressure and client-side underflow delay injection apply only
+  to non-tunnelled output. Tunnelled cases still exercise vendor-path playback
+  and cleanup, and explicitly log that those client-side probes are inapplicable.
+
+Decoder output metadata is retained when unchanged, and all metadata fields are
+forwarded. Pending client-owned handles are drained before closing sessions.
+The decoder remains open until sink playback and cleanup complete.
+
 ### Feature List
 
 VTS L3 validates all the Video Sink features in both sequential and concurrent modes (if the platform supports multiple sinks) as represented below.
@@ -61,7 +88,7 @@ VTS L3 validates all the Video Sink features in both sequential and concurrent m
 The Sequential Sink Playback test evaluates each video sink individually, one after another, to ensure functional correctness across all supported features. This approach helps isolate issues and verify that every sink instance performs as expected in a standalone environment.
 
 ##### Non-Tunnel
-In non-tunnel mode Decoder should set Sink to nom-tunnel mode, Decoded video frames are passed to the linked video sink via AVbuffer for rendering.
+With vendor-selected non-tunnelled output, Decoded video frames are passed to the linked video sink via AVbuffer for rendering.
 ```mermaid
 block-beta
     block:1
@@ -72,7 +99,7 @@ block-beta
     end
 ```
 ##### Tunnel
-In tunnel mode Decoder should set Sink to tunnel mode, Decoded video frames are passed directly to the linked video plane for rendering.
+With vendor-selected tunnelled output, Decoded video frames are passed directly to the linked video plane for rendering.
 ```mermaid
 block-beta
     block:1
@@ -113,7 +140,7 @@ columns 1
     end
 ```
 ##### Tunnel
-In tunnel mode Decoder should set Sink to tunnel mode, Decoded video frames are passed directly to the linked video plane for rendering.
+With vendor-selected tunnelled output, Decoded video frames are passed directly to the linked video plane for rendering.
 ```mermaid
 block-beta
 columns 1
@@ -155,41 +182,17 @@ The following table outlines the core features validated in the L3 test phase
 |11|Multi Instance|If the platform supports multiple sinks, this test runs multiple instances simultaneously to validate independent output and associated metrics.|
 
 
-| # | Test | Tunnel | EOS | Underflow | Video Resume | Flush | Discard Frame Till | Queue Depth | Frames Dropped | Frames Dropped due to FRC | Frames Repeated due to FRC | Multi Instance |
-|---|------|--------|-----|-----------|---------------|-------|--------------------|--------------|----------------|-----------------------------|------------------------------|----------------|
-| 1 | VSink_Sequential_NonTunnel | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 2 | VSink_Sequential_NonTunnel_EOS | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 3 | VSink_Sequential_NonTunnel_Underflow | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 4 | VSink_Sequential_NonTunnel_VideoResume | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 5 | VSink_Sequential_NonTunnel_Flush | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 6 | VSink_Sequential_NonTunnel_DiscardFrameTill | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
-| 7 | VSink_Sequential_NonTunnel_QueueDepth | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ |
-| 8 | VSink_Sequential_NonTunnel_FramesDropped | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ |
-| 9 | VSink_Sequential_NonTunnel_FramesDroppedForFRC | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ |
-|10 | VSink_Sequential_NonTunnel_FramesRepeatedForFRC | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ |
-|11 | VSink_Sequential_Tunnel | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|12 | VSink_Sequential_Tunnel_EOS | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|13 | VSink_Sequential_Tunnel_Underflow | ✔ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|14 | VSink_Sequential_Tunnel_VideoResume | ✔ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|15 | VSink_Sequential_Tunnel_Flush | ✔ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|16 | VSink_Sequential_Tunnel_DiscardFrameTill | ✔ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ |
-|17 | VSink_Sequential_Tunnel_QueueDepth | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ |
-|18 | VSink_Sequential_Tunnel_FramesDropped | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ |
-|19 | VSink_Sequential_Tunnel_FramesDroppedForFRC | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ |
-|20 | VSink_Sequential_Tunnel_FramesRepeatedForFRC | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ |
-|21 | Sink_MultiInstance_NonTunnel | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|22 | Sink_MultiInstance_NonTunnel_EOS | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|23 | Sink_MultiInstance_NonTunnel_Underflow | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|24 | Sink_MultiInstance_NonTunnel_VideoResume | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|25 | Sink_MultiInstance_NonTunnel_Flush | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|26 | Sink_MultiInstance_NonTunnel_DiscardFrameTill | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|27 | Sink_MultiInstance_NonTunnel_QueueDepth | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✔ |
-|28 | Sink_MultiInstance_NonTunnel_FramesDropped | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✔ |
-|29 | Sink_MultiInstance_NonTunnel_FramesDroppedForFRC | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✔ |
-|30 | Sink_MultiInstance_NonTunnel_FramesRepeatedForFRC | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ | ✔ |
-|31 | Sink_MultiInstance_Tunnel | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|32 | Sink_MultiInstance_Tunnel_EOS | ✔ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|33 | Sink_MultiInstance_Tunnel_Underflow | ✔ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|34 | Sink_MultiInstance_Tunnel_VideoResume | ✔ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|35 | Sink_MultiInstance_Tunnel_Flush | ✔ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✘ | ✔ |
-|36 | Sink_MultiInstance_Tunnel_DiscardFrameTill | ✔ | ✘ | ✘ | ✘ | ✘ | ✔ | ✘ | ✘ | ✘ | ✘ | ✔ |
+| # | Test | Configuration |
+|---|------|---------------|
+| 1 | `VSink_Sequential` | `Sink_Decode` |
+| 2 | `VSink_Sequential_EOS` | `Sink_EOS` |
+| 3 | `VSink_Sequential_Underflow` | `Sink_Underflow` |
+| 4 | `VSink_Sequential_Flush` | `Sink_Flush` |
+| 5 | `VSink_Sequential_DiscardFramesUntil` | `Sink_DiscardFramesUntil` |
+| 6 | `VSink_Sequential_BackPressure` | `Sink_BackPressure` |
+| 7 | `VSink_Concurrent` | `Sink_Decode` |
+| 8 | `VSink_Concurrent_EOS` | `Sink_EOS` |
+| 9 | `VSink_Concurrent_Underflow` | `Sink_Underflow` |
+| 10 | `VSink_Concurrent_Flush` | `Sink_Flush` |
+| 11 | `VSink_Concurrent_DiscardFramesUntil` | `Sink_DiscardFramesUntil` |
+| 12 | `VSink_Concurrent_BackPressure` | `Sink_BackPressure` |

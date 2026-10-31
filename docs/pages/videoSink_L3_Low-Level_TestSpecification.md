@@ -27,8 +27,35 @@ This document outlines the L3 test design for the Video Sink module.
 ## References
 
 - Video Sink High Level Test Specification - [VideoSink_High-Level_TestSpecification.md](VideoSini_High-Level_TestSpecification.md)
-- Video Sink Interface Definitions - [Video Sink HAL](https://github.com/rdkcentral/rdk-halif-aidl/tree/v0.6/VideoSink/current/com/rdk/hal/VideoSink)
+- Video Sink Interface Definitions - [Video Sink HAL](https://github.com/rdkcentral/rdk-halif-aidl/tree/0.23.0/videosink/0.3.0.0/com/rdk/hal/videosink)
 - Video Sink Overview - [Video Sink Overview](https://rdkcentral.github.io/rdk-halif-aidl/halif/Video_sink/current/Video_sink/)
+
+### AIDL 0.23.0 platform-selected playback
+
+L3 tests are named by operation, without tunnel/non-tunnel or secure/non-secure
+variants. Each sink is associated with its decoder using `setVideoDecoder()`
+and started before decoding begins. After the decoder reaches `STARTED`, the
+test queries `IVideoDecoder.getCurrentOperationalMode()`.
+
+Secure input is used only when both the decoder and sink advertise
+`Capabilities.supportsSecure`; otherwise the decoder is opened non-secure.
+Sequential cases exercise every supported decoder/sink combination. Concurrent
+cases select independent decoder/sink/clock pairs and check each heap they use.
+
+- `NON_TUNNELLED`: validate each output handle, then pass it to `queueVideoFrame()`.
+  Ownership transfers only on acceptance. Rejected handles are freed by the client;
+  accepted buffers are freed by the sink.
+- `TUNNELLED`: require `-1` in `onFrameOutput()`. Do not call `queueVideoFrame()`;
+  the vendor delivers frames internally and owns buffer cleanup.
+- Both paths validate presentation callbacks, EOS sequencing, flush/discard
+  operations and metrics. Middleware signals sink EOS after decoder EOS.
+- Client queue back-pressure and client-side underflow delay injection apply only
+  to non-tunnelled output. Tunnelled cases still exercise vendor-path playback
+  and cleanup, and explicitly log that those client-side probes are inapplicable.
+
+Decoder output metadata is retained when unchanged, and all metadata fields are
+forwarded. Pending client-owned handles are drained before closing sessions.
+The decoder remains open until sink playback and cleanup complete.
 
 ## Class Design
 
@@ -74,9 +101,9 @@ The class overrides `SetUp()` and `TearDown()` from `ut_core` to handle initiali
 |-|--------|---------|-----------|-------|
 |1|Setup|None|Initializes the test by acquiring service handles, supported sink IDs, sink capabilities, and registering event listeners|`getVideoSinkIds()`<br>`getVideoSink()`<br>`registerEventListener()`|
 |2|TearDown|None|Cleans up by unregistering event listeners|`unregisterEventListener()`|
-|3|runSequentialSink|vector\<testConfiguration_t\>& configuration<br>bool secureSink|Sinks streams using all sinks sequentially using `SinkTest` Class|`getHeapMetrics()`|
-|4|runConcurrentSink|vector\<testConfiguration_t\>& configuration<br>bool secureSink|Launches multiple threads to sink streams concurrently using `SinkTest` Class|`getHeapMetrics()`|
-|5|runSingleProcessTest|char *testName<br>bool secureMode<br>bool concurrentMode|If `concurrentMode` is enabled, this function invokes `runConcurrentSink`; otherwise, it calls `runSequentialSink`||
+|3|runSequentialSink|vector\<testConfiguration_t\>& configuration<br>|Sinks streams using all sinks sequentially using `SinkTest` Class|`getHeapMetrics()`|
+|4|runConcurrentSink|vector\<testConfiguration_t\>& configuration<br>|Launches multiple threads to sink streams concurrently using `SinkTest` Class|`getHeapMetrics()`|
+|5|runSingleProcessTest|char *testName<br>bool concurrentMode|If `concurrentMode` is enabled, this function invokes `runConcurrentSink`; otherwise, it calls `runSequentialSink`||
 
 #### Setup
 
@@ -328,85 +355,17 @@ This check verifies that the `HAL` correctly triggers the expected call-backs fo
 
 The L3 tests validate the functional correctness and performance of the VideoSink HAL by simulating real-world decoding workflows. Each test calls `runSingleProcessTest` with different parameters.
 
-| #  | Test Name                                       | function              | Arguments                                      |
-|----|------------------------------------------------|-----------------------|------------------------------------------------|
-| 1  | VSink_Sequential_NonTunnel_NonSecure_QueueDepth | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 2  | VSink_Sequential_NonTunnel_NonSecure_FramesReceived | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 3  | VSink_Sequential_NonTunnel_NonSecure_FramesDroppedLate | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 4  | VSink_Sequential_NonTunnel_NonSecure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 5  | VSink_Sequential_NonTunnel_NonSecure_FramesMiss | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 6  | VSink_Sequential_NonTunnel_NonSecure_FramesDroppedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 7  | VSink_Sequential_NonTunnel_NonSecure_VideoFlush | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 8  | VSink_Sequential_NonTunnel_NonSecure_EOS        | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 9  | VSink_Sequential_NonTunnel_NonSecure_UnderflowResumed | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 10 | VSink_Sequential_NonTunnel_NonSecure_DiscardFramesUntil | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=false |
-| 11 | VSink_Concurrent_NonTunnel_NonSecure_QueueDepth | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 12 | VSink_Concurrent_NonTunnel_NonSecure_FramesReceived | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 13 | VSink_Concurrent_NonTunnel_NonSecure_FramesDroppedLate | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 14 | VSink_Concurrent_NonTunnel_NonSecure_FramesDroppedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 15 | VSink_Concurrent_NonTunnel_NonSecure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 16 | VSink_Concurrent_NonTunnel_NonSecure_FramesMiss | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 17 | VSink_Concurrent_NonTunnel_NonSecure_VideoFlush | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 18 | VSink_Concurrent_NonTunnel_NonSecure_EOS        | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 19 | VSink_Concurrent_NonTunnel_NonSecure_UnderflowResumed | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 20 | VSink_Concurrent_NonTunnel_NonSecure_DiscardFramesUntil | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=false |
-| 21 | VSink_Sequential_NonTunnel_Secure_QueueDepth    | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 22 | VSink_Sequential_NonTunnel_Secure_FramesReceived | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 23 | VSink_Sequential_NonTunnel_Secure_FramesDroppedLate | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 24 | VSink_Sequential_NonTunnel_Secure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 25 | VSink_Sequential_NonTunnel_Secure_FramesMiss    | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 26 | VSink_Sequential_NonTunnel_Secure_FramesDroppedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 27 | VSink_Sequential_NonTunnel_Secure_VideoFlush    | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 28 | VSink_Sequential_NonTunnel_Secure_EOS           | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 29 | VSink_Sequential_NonTunnel_Secure_UnderflowResumed | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 30 | VSink_Sequential_NonTunnel_Secure_DiscardFramesUntil | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=false |
-| 31 | VSink_Concurrent_NonTunnel_Secure_QueueDepth    | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 32 | VSink_Concurrent_NonTunnel_Secure_FramesReceived | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 33 | VSink_Concurrent_NonTunnel_Secure_FramesDroppedLate | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 34 | VSink_Concurrent_NonTunnel_Secure_FramesDroppedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 35 | VSink_Concurrent_NonTunnel_Secure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 36 | VSink_Concurrent_NonTunnel_Secure_FramesMiss    | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 37 | VSink_Concurrent_NonTunnel_Secure_VideoFlush    | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 38 | VSink_Concurrent_NonTunnel_Secure_EOS           | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 39 | VSink_Concurrent_NonTunnel_Secure_UnderflowResumed | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 40 | VSink_Concurrent_NonTunnel_Secure_DiscardFramesUntil | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=false |
-| 41 | VSink_Sequential_Tunnel_NonSecure_QueueDepth    | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 42 | VSink_Sequential_Tunnel_NonSecure_FramesReceived | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 43 | VSink_Sequential_Tunnel_NonSecure_FramesDroppedLate | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 44 | VSink_Sequential_Tunnel_NonSecure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 45 | VSink_Sequential_Tunnel_NonSecure_FramesMiss    | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 46 | VSink_Sequential_Tunnel_NonSecure_FramesDroppedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 47 | VSink_Sequential_Tunnel_NonSecure_VideoFlush    | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 48 | VSink_Sequential_Tunnel_NonSecure_EOS           | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 49 | VSink_Sequential_Tunnel_NonSecure_UnderflowResumed | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 50 | VSink_Sequential_Tunnel_NonSecure_DiscardFramesUntil | runSingleProcessTest  | secureMode=false<br>concurrentMode=false<br>isTunnel=true |
-| 51 | VSink_Concurrent_Tunnel_NonSecure_QueueDepth    | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 52 | VSink_Concurrent_Tunnel_NonSecure_FramesReceived | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 53 | VSink_Concurrent_Tunnel_NonSecure_FramesDroppedLate | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 54 | VSink_Concurrent_Tunnel_NonSecure_FramesDroppedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 55 | VSink_Concurrent_Tunnel_NonSecure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 56 | VSink_Concurrent_Tunnel_NonSecure_FramesMiss    | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 57 | VSink_Concurrent_Tunnel_NonSecure_VideoFlush    | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 58 | VSink_Concurrent_Tunnel_NonSecure_EOS           | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 59 | VSink_Concurrent_Tunnel_NonSecure_UnderflowResumed | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 60 | VSink_Concurrent_Tunnel_NonSecure_DiscardFramesUntil | runSingleProcessTest  | secureMode=false<br>concurrentMode=true<br>isTunnel=true |
-| 61 | VSink_Sequential_Tunnel_Secure_QueueDepth       | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 62 | VSink_Sequential_Tunnel_Secure_FramesReceived   | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 63 | VSink_Sequential_Tunnel_Secure_FramesDroppedLate | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 64 | VSink_Sequential_Tunnel_Secure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 65 | VSink_Sequential_Tunnel_Secure_FramesMiss       | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 66 | VSink_Sequential_Tunnel_Secure_FramesDroppedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 67 | VSink_Sequential_Tunnel_Secure_VideoFlush       | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 68 | VSink_Sequential_Tunnel_Secure_EOS              | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 69 | VSink_Sequential_Tunnel_Secure_UnderflowResumed | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 70 | VSink_Sequential_Tunnel_Secure_DiscardFramesUntil | runSingleProcessTest  | secureMode=true<br>concurrentMode=false<br>isTunnel=true |
-| 71 | VSink_Concurrent_Tunnel_Secure_QueueDepth       | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 72 | VSink_Concurrent_Tunnel_Secure_FramesReceived   | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 73 | VSink_Concurrent_Tunnel_Secure_FramesDroppedLate | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 74 | VSink_Concurrent_Tunnel_Secure_FramesDroppedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 75 | VSink_Concurrent_Tunnel_Secure_FramesRepeatedFRC | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 76 | VSink_Concurrent_Tunnel_Secure_FramesMiss       | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 77 | VSink_Concurrent_Tunnel_Secure_VideoFlush       | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 78 | VSink_Concurrent_Tunnel_Secure_EOS              | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 79 | VSink_Concurrent_Tunnel_Secure_UnderflowResumed | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
-| 80 | VSink_Concurrent_Tunnel_Secure_DiscardFramesUntil | runSingleProcessTest  | secureMode=true<br>concurrentMode=true<br>isTunnel=true |
+| # | Test | Configuration |
+|---|------|---------------|
+| 1 | `VSink_Sequential` | `Sink_Decode` |
+| 2 | `VSink_Sequential_EOS` | `Sink_EOS` |
+| 3 | `VSink_Sequential_Underflow` | `Sink_Underflow` |
+| 4 | `VSink_Sequential_Flush` | `Sink_Flush` |
+| 5 | `VSink_Sequential_DiscardFramesUntil` | `Sink_DiscardFramesUntil` |
+| 6 | `VSink_Sequential_BackPressure` | `Sink_BackPressure` |
+| 7 | `VSink_Concurrent` | `Sink_Decode` |
+| 8 | `VSink_Concurrent_EOS` | `Sink_EOS` |
+| 9 | `VSink_Concurrent_Underflow` | `Sink_Underflow` |
+| 10 | `VSink_Concurrent_Flush` | `Sink_Flush` |
+| 11 | `VSink_Concurrent_DiscardFramesUntil` | `Sink_DiscardFramesUntil` |
+| 12 | `VSink_Concurrent_BackPressure` | `Sink_BackPressure` |

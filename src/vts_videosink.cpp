@@ -207,12 +207,13 @@ void VideoSinkControllerListener::resetEos()
  * Blocks the calling thread until the EOS event is received or the timeout expires.
  *
  * @param timeout Duration to wait for the EOS event.
+ * @param expectedCount Number of EOS events required to complete the wait.
  * @return true if EOS event received within timeout, false otherwise.
  */
-bool VideoSinkControllerListener::waitForEosEvent(std::chrono::milliseconds timeout)
+bool VideoSinkControllerListener::waitForEosEvent(std::chrono::milliseconds timeout, size_t expectedCount)
 {
     std::unique_lock<std::mutex> lock(mMutex_eos);
-    return mCV_eos.wait_for(lock, timeout, [this] { return mEosReceived; });
+    return mCV_eos.wait_for(lock, timeout, [this, expectedCount] { return mEosPTS.size() >= expectedCount; });
 }
 
 /**
@@ -602,10 +603,10 @@ void VideoSinkEventListener::resetEos()
     mEosPTS.clear();
 }
 
-bool VideoSinkEventListener::waitForEosEvent(std::chrono::milliseconds timeout)
+bool VideoSinkEventListener::waitForEosEvent(std::chrono::milliseconds timeout, size_t expectedCount)
 {
     std::unique_lock<std::mutex> lock(mMutex_eos);
-    return mCV_eos.wait_for(lock, timeout, [this] { return mEosReceived; });
+    return mCV_eos.wait_for(lock, timeout, [this, expectedCount] { return mEosPTS.size() >= expectedCount; });
 }
 
 /**

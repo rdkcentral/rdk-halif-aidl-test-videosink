@@ -98,6 +98,7 @@ public:
         sp<VideoDecoderControllerListener> decoderControllerListener,
         sp<IAVBuffer> AVBufferManager,
         IVideoDecoder::Id decoderId,
+        sp<IVideoDecoder> decoderHandle,
         IAVClock::Id clockId,
         const videoDecoderTestConfiguration_t& config, bool isClockInUse)
     {
@@ -107,6 +108,7 @@ public:
         mVideoSinkEventListener = VideoSinkEventListner;
         mDecoderControllerListener = decoderControllerListener;
         mDecoderId = decoderId;
+        mDecoderHandle = decoderHandle;
         mTestConfiguration = config;
         mIsClockInUse = isClockInUse;
         mClockId = clockId;
@@ -117,7 +119,9 @@ public:
         mFrameCount = 0;
     }
 
-    void run ( bool isTunnel );
+    void prepare();
+    void run();
+    void closeSession();
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 
 private:
@@ -127,6 +131,8 @@ private:
     sp<VideoSinkEventListener> mVideoSinkEventListener;
     sp<VideoDecoderControllerListener> mDecoderControllerListener;
     IVideoDecoder::Id mDecoderId;
+    sp<IVideoDecoder> mDecoderHandle;
+    bool mIsTunnel = false;
     IAVClock::Id mClockId;
     sp<IAVClock> mClock;
     videoDecoderTestConfiguration_t mTestConfiguration;
@@ -143,8 +149,9 @@ private:
 
     float getBytesPerPixelMultiplier(const std::string& basePixelFormat, int colorDepth) const;
     PixelFormat getPixelFormatEnum(const std::string& basePixelFormat);
-    void videoSinkNonTunnelMode();
-    void videoSinkTunnelMode();
+    void consumeDecodedFrames();
+    bool validateOutputHandle(const DecodedVideoFrame_t& frame);
+    void releasePendingOutputFrames();
     void setupClock();
     void tearDownClock();
     void validateCallbacks();
@@ -153,7 +160,6 @@ private:
     void validateUnderflowResume(int64_t pts);
     void setupVideoSink();
     void tearDownVideoSink();
-    void copyMetaData(const videodecoder::FrameMetadata& src, videodecoder::FrameMetadata& dst);
     bool validateSinkBackPressure(int64_t bufferHandle, int64_t pts, videodecoder::FrameMetadata& metadata);
 };
 

@@ -12,6 +12,24 @@ This test suite is part of Unified VTS for AIDL HALs. For initial setup, environ
 
 While the Unified VTS can run all tests at once, you can execute the `VTS_L1_VideoSink`, `VTS_L2_VideoSink`, and `VTS_L3_VideoSink` test suite individually for targeted validation. This is useful for debugging and development of the `VideoSink` HAL.
 
+### AIDL 0.23.0
+
+L3 tests use operation-based names such as `VSink_Sequential`,
+`VSink_Sequential_EOS` and `VSink_Concurrent_BackPressure`. The 48 mode-specific
+variants are consolidated into 12 cases; existing `Sink_*` configuration keys
+and stream/control settings are unchanged.
+
+The sink is associated with its decoder before decoding starts. After decoder
+`start()`, the test queries `getCurrentOperationalMode()`. Valid non-tunnelled
+handles are queued to the sink; `-1` tunnelled handles are never queued or freed
+by the client. The vendor owns tunnelled delivery and cleanup. Secure input is
+selected only when both decoder and sink advertise `supportsSecure`.
+
+Both paths test playback, EOS sequencing, flush/discard operations and cleanup.
+Client queue back-pressure and client-side underflow injection are non-tunnelled
+probes; their inapplicability to tunnelled playback is logged explicitly.
+The suite depends on the corresponding AIDL 0.23.0 video-decoder test implementation.
+
 ## Reference Documents
 
 |SNo|Document Name|Document Description|Document Link|
