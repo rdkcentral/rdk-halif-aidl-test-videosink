@@ -326,18 +326,19 @@ public:
             /*Get the Video Decoder IDs*/
             VIDEODECODER_MANAGER_GETVIDEODECODERIDS(videoDecoderIds);
 
-            vector<videodecoder::OperationalMode> supportedModes;
-            Status opModeStatus = gVideoDecoderManager->getSupportedOperationalModes(&supportedModes);
-            if (opModeStatus.isOk() && opModeStatus.exceptionCode() == Status::EX_NONE)
+            /* IVideoDecoderManager::getSupportedOperationalModes() was removed in rdk-halif-aidl 0.23.0
+             * (operational mode is now vendor-selected). Use the modes declared in the VideoDecoder HFP. */
+            mIsTunnelSupported = false;
+            mIsNonTunnelSupported = false;
+            for (const auto& decoder : gVideodecoders_hfp)
             {
-                mIsTunnelSupported = std::find(supportedModes.begin(), supportedModes.end(), videodecoder::OperationalMode::TUNNELLED) != supportedModes.end();
-                mIsNonTunnelSupported = std::find(supportedModes.begin(), supportedModes.end(), videodecoder::OperationalMode::NON_TUNNELLED) != supportedModes.end();
+                const auto& modes = decoder.supportedOperationalModes;
+                mIsTunnelSupported |= std::find(modes.begin(), modes.end(), OperationalMode::TUNNELLED) != modes.end();
+                mIsNonTunnelSupported |= std::find(modes.begin(), modes.end(), OperationalMode::NON_TUNNELLED) != modes.end();
             }
-            else
+            if (!mIsTunnelSupported && !mIsNonTunnelSupported)
             {
-                mIsTunnelSupported = false;
-                mIsNonTunnelSupported = false;
-                UT_LOG_WARNING("Failed to query decoder operational modes. Tunnel and non-tunnel tests will be skipped.");
+                UT_LOG_WARNING("No decoder operational modes declared in HFP. Tunnel and non-tunnel tests will be skipped.");
             }
 
             android::ProcessState::self()->startThreadPool();

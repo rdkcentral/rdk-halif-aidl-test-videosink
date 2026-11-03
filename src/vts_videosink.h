@@ -255,7 +255,7 @@ extern void *gVideoSinkTestConfiguration;
                 break; \
             case PropertyValue::Value::Tag::stringValue: \
                 UT_LOG_INFO("Result getProperty(IN:property[%s], OUT:propertyValue[%s]), status:[isOK:%s, exception:%s]", videosink::toString(property).c_str(), \
-                propertyValue->value->get<PropertyValue::Value::Tag::stringValue>().string(), \
+                propertyValue->value->get<PropertyValue::Value::Tag::stringValue>().c_str(), \
                 UT_Control_GetMapString(bool_mapTable, status.isOk()), \
                 UT_Control_GetMapString(statusException_mapTable, status.exceptionCode())); \
                 break; \
