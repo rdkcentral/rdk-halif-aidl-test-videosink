@@ -66,6 +66,7 @@
 #define __VTS_VIDEOSINK_TEST_H__
 
 #include <thread>
+#include <functional>
 #include <chrono>
 #include <ut.h>
 #include <set>
@@ -118,6 +119,10 @@ public:
     }
 
     void run ( bool isTunnel );
+    /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor. The sink is set up
+     * first, then resolveTunnelMode is called (typically waiting for the decoder to start and read
+     * getCurrentOperationalMode()) to choose the tunnel or non-tunnel frame path. */
+    void run ( const std::function<bool(bool& isTunnel)>& resolveTunnelMode );
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 
 private:

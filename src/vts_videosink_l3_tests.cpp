@@ -95,8 +95,6 @@ public:
     vector<tuple<IVideoDecoder::Id, sp<IVideoDecoder>, sp<VideoDecoderControllerListener>, sp<VideoDecoderEventListener>, videodecoder::Capabilities*>> mVideoDecoderList;
     sp<IAVBuffer> mAVBufferManager;
     IAVBufferHelper* mAVbufferHelper;
-    bool mIsTunnelSupported = false;
-    bool mIsNonTunnelSupported = false;
 
     const decoder_t* getDecoderHfpCapabilities(const IVideoDecoder::Id& decoderId) const
     {
@@ -326,21 +324,6 @@ public:
             /*Get the Video Decoder IDs*/
             VIDEODECODER_MANAGER_GETVIDEODECODERIDS(videoDecoderIds);
 
-            /* IVideoDecoderManager::getSupportedOperationalModes() was removed in rdk-halif-aidl 0.23.0
-             * (operational mode is now vendor-selected). Use the modes declared in the VideoDecoder HFP. */
-            mIsTunnelSupported = false;
-            mIsNonTunnelSupported = false;
-            for (const auto& decoder : gVideodecoders_hfp)
-            {
-                const auto& modes = decoder.supportedOperationalModes;
-                mIsTunnelSupported |= std::find(modes.begin(), modes.end(), OperationalMode::TUNNELLED) != modes.end();
-                mIsNonTunnelSupported |= std::find(modes.begin(), modes.end(), OperationalMode::NON_TUNNELLED) != modes.end();
-            }
-            if (!mIsTunnelSupported && !mIsNonTunnelSupported)
-            {
-                UT_LOG_WARNING("No decoder operational modes declared in HFP. Tunnel and non-tunnel tests will be skipped.");
-            }
-
             android::ProcessState::self()->startThreadPool();
 
             for (const auto& _videoDecoderId : videoDecoderIds)
@@ -393,7 +376,7 @@ public:
     }
 
     bool runSequentialSink(const videoDecoderTestConfiguration_t& decoderConfig,
-                           bool secureDecode, bool isTunnel)
+                           bool secureDecode)
     {
         bool executedAtLeastOne = false;
         // Find a usable decoder
@@ -446,7 +429,7 @@ public:
 
                 videoDecoderTest decodeTest(decoderId, decoderHandle, decoderControlListener,
                                            decoderEventListener, mAVBufferManager, secureDecode,
-                                           isTunnel, decoderConfig, mAVbufferHelper, isSinkAttached);
+                                           kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached);
 
                 VideoSinkTest sinkTest(_sinkId, sinkHandle, controlListener, eventListener,
                                        decoderControlListener, mAVBufferManager, decoderId, clockId, decoderConfig,
@@ -459,7 +442,8 @@ public:
 
                 std::thread decodeThread(&videoDecoderTest::run, &decodeTest, true);
 
-                sinkTest.run(isTunnel);
+                // Sink path follows the mode the vendor selects, read by the decoder after start()
+                sinkTest.run(vendorTunnelModeOf(decodeTest));
 
                 executedAtLeastOne = true;
 
@@ -489,7 +473,7 @@ public:
     }
 
     bool runConcurrentSink(const videoDecoderTestConfiguration_t& decoderConfig,
-                           bool secure, bool tunnel)
+                           bool secure)
     {
         bool executedAtLeastOne = false;
         try
@@ -547,6 +531,18 @@ public:
                 return false;
             }
 
+            // Create the decoder test objects first (no HAL calls) so each sink can wait for its decoder's mode
+            for (int32_t i = 0; i < numInstances; ++i)
+            {
+                auto& [decoderId, decoderHandle, decoderControlListener, decoderEventListener, capabilities] = availableDecoderList[i];
+
+                decoderTests.push_back(make_unique<videoDecoderTest>(decoderId, decoderHandle,
+                        sp<VideoDecoderControllerListener>::cast(decoderControlListener),
+                        sp<VideoDecoderEventListener>::cast(decoderEventListener),
+                        sp<IAVBuffer>::cast(mAVBufferManager),
+                        secure, kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached));
+            }
+
             for(int32_t i = 0; i < numInstances; ++i)
             {
                 auto& [_sinkId, videoSink, videoSinkControlListener, videoSinkEventListener] = availableSinkList[i];
@@ -563,25 +559,17 @@ public:
                 decoderControlListener->resetQueues();
                 decoderEventListener->resetQueues();
 
-                sinkThreads.emplace_back(&VideoSinkTest::run, sinkTest.get(), tunnel);
+                videoDecoderTest* decoderTest = decoderTests[i].get();
+                VideoSinkTest* sink = sinkTest.get();
+                sinkThreads.emplace_back([sink, decoderTest]() { sink->run(vendorTunnelModeOf(*decoderTest)); });
                 sinkTests.push_back(std::move(sinkTest));
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-            for (int32_t i = 0; i < numInstances; ++i)
+            for (auto& decoderTest : decoderTests)
             {
-                auto& [decoderId, decoderHandle, decoderControlListener, decoderEventListener, capabilities] = availableDecoderList[i];
-
-                auto decoderTest = make_unique<videoDecoderTest>(decoderId, decoderHandle,
-                        sp<VideoDecoderControllerListener>::cast(decoderControlListener),
-                        sp<VideoDecoderEventListener>::cast(decoderEventListener),
-                        sp<IAVBuffer>::cast(mAVBufferManager),
-                        secure, tunnel, decoderConfig, mAVbufferHelper, isSinkAttached);
-
                 decoderThreads.emplace_back(&videoDecoderTest::run, decoderTest.get(), true);
-
-                decoderTests.push_back(move(decoderTest));
             }
 
             for (auto& t : decoderThreads)
@@ -624,21 +612,28 @@ public:
         return executedAtLeastOne;
     }
 
-    void runSingleProcessTest(const char *testName, bool secureMode, bool isTunnel, bool concurrentMode)
+    /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor and cannot be requested.
+     * The mode is read inside the test after the decoder's start() (getCurrentOperationalMode())
+     * and the sink follows it, so there is one test per scenario instead of a Tunnel / NonTunnel pair. */
+    static constexpr bool kTunnelModeNotRequested = false;
+    static constexpr std::chrono::milliseconds kOperationalModeTimeout{15000};
+
+    static std::function<bool(bool&)> vendorTunnelModeOf(videoDecoderTest& decodeTest)
+    {
+        return [&decodeTest](bool& isTunnel) {
+            OperationalMode mode;
+            if (!decodeTest.waitForOperationalMode(mode, kOperationalModeTimeout))
+            {
+                return false;
+            }
+            isTunnel = (mode == OperationalMode::TUNNELLED);
+            return true;
+        };
+    }
+
+    void runSingleProcessTest(const char *testName, bool secureMode, bool concurrentMode)
     {
         vector<videoDecoderTestConfiguration_t> sinkConfigs;
-
-        if (isTunnel && !mIsTunnelSupported)
-        {
-            GTEST_SKIP() << "Tunnel mode is not supported by decoder capabilities";
-            return;
-        }
-
-        if (!isTunnel && !mIsNonTunnelSupported)
-        {
-            GTEST_SKIP() << "Non-tunnel mode is not supported by decoder capabilities";
-            return;
-        }
 
         vts_videodecoder_parse_testconfig(gVideoSinkTestConfiguration, VIDEOSINKMGR,
                                           gTestGroup, testName, sinkConfigs);
@@ -661,11 +656,11 @@ public:
             UT_LOG_INFO("=====================================================================================");
             if (concurrentMode)
             {
-                executedAnyConfig = runConcurrentSink(sinkConfig, secureMode, isTunnel) || executedAnyConfig;
+                executedAnyConfig = runConcurrentSink(sinkConfig, secureMode) || executedAnyConfig;
             }
             else
             {
-                executedAnyConfig = runSequentialSink(sinkConfig, secureMode, isTunnel) || executedAnyConfig;
+                executedAnyConfig = runSequentialSink(sinkConfig, secureMode) || executedAnyConfig;
             }
         }
 
@@ -691,867 +686,411 @@ public:
 };
 
 /****************************************************************
-* Sequentaial Non-Tunnel Non-Secure Tests
+* Sequential Non-Secure Tests
 ****************************************************************/
 /**
  * @brief Test the sink's ability to render decoded frames
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 001@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure)
 {
     const char *testName = "Sink_Decode";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify EOS is received after eos pts to the sink.
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 002@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure_EOS)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure_EOS)
 {
     const char *testName = "Sink_EOS";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Video sink playback with underflow detection
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 003@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure_Underflow)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure_Underflow)
 {
     const char *testName = "Sink_Underflow";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify onFlushComplete is received after flushing sink.
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 004@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure_Flush)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure_Flush)
 {
     const char *testName = "Sink_Flush";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 005@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure_DiscardFramesUntil)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure_DiscardFramesUntil)
 {
     const char *testName = "Sink_DiscardFramesUntil";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Sequential
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 006@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_NonSecure_BackPressure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonSecure_BackPressure)
 {
     const char *testName = "Sink_BackPressure";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /****************************************************************
-* Sequentaial Tunnel Non-Secure Tests
+* Sequential Secure Tests
 ****************************************************************/
 /**
  * @brief Test the sink's ability to render decoded frames
  *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 007@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure)
-{
-    const char *testName = "Sink_Decode";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify EOS is received after eos pts to the sink.
- *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 008@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure_EOS)
-{
-    const char *testName = "Sink_EOS";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Video sink playback with underflow detection
- *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 009@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure_Underflow)
-{
-    const char *testName = "Sink_Underflow";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify onFlushComplete is received after flushing sink.
- *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 010@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure_Flush)
-{
-    const char *testName = "Sink_Flush";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 011@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure_DiscardFramesUntil)
-{
-    const char *testName = "Sink_DiscardFramesUntil";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Sequential
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 012@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_NonSecure_BackPressure)
-{
-    const char *testName = "Sink_BackPressure";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/****************************************************************
-* Sequentaial Non-Tunnel Secure Tests
-****************************************************************/
-/**
- * @brief Test the sink's ability to render decoded frames
- *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 013@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure)
 {
     const char *testName = "Sink_Decode";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify EOS is received after eos pts to the sink.
  *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 014@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure_EOS)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure_EOS)
 {
     const char *testName = "Sink_EOS";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Video sink playback with underflow detection
  *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 015@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure_Underflow)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure_Underflow)
 {
     const char *testName = "Sink_Underflow";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify onFlushComplete is received after flushing sink.
  *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 016@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure_Flush)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure_Flush)
 {
     const char *testName = "Sink_Flush";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 017@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure_DiscardFramesUntil)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure_DiscardFramesUntil)
 {
     const char *testName = "Sink_DiscardFramesUntil";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Sequential
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 018@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_NonTunnel_Secure_BackPressure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Secure_BackPressure)
 {
     const char *testName = "Sink_BackPressure";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /****************************************************************
-* Sequentaial Tunnel Secure Tests
-****************************************************************/
-/**
- * @brief Test the sink's ability to render decoded frames
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 019@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure)
-{
-    const char *testName = "Sink_Decode";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify EOS is received after eos pts to the sink.
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 020@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure_EOS)
-{
-    const char *testName = "Sink_EOS";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Video sink playback with underflow detection
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 021@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure_Underflow)
-{
-    const char *testName = "Sink_Underflow";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify onFlushComplete is received after flushing sink.
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 022@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure_Flush)
-{
-    const char *testName = "Sink_Flush";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 023@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure_DiscardFramesUntil)
-{
-    const char *testName = "Sink_DiscardFramesUntil";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Sequential
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 024@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Sequential_Tunnel_Secure_BackPressure)
-{
-    const char *testName = "Sink_BackPressure";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = false;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/****************************************************************
-* Concurrent Non-Tunnel Non-Secure Tests
+* Concurrent Non-Secure Tests
 ****************************************************************/
 /**
  * @brief Test the sink's ability to render decoded frames
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 001@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure)
 {
     const char *testName = "Sink_Decode";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify EOS is received after eos pts to the sink.
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 002@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure_EOS)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure_EOS)
 {
     const char *testName = "Sink_EOS";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Video sink playback with underflow detection
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 003@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure_Underflow)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure_Underflow)
 {
     const char *testName = "Sink_Underflow";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify onFlushComplete is received after flushing sink.
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 004@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure_Flush)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure_Flush)
 {
     const char *testName = "Sink_Flush";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 005@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure_DiscardFramesUntil)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure_DiscardFramesUntil)
 {
     const char *testName = "Sink_DiscardFramesUntil";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Non-Secure
+ *        Modes: Non-Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 006@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_NonSecure_BackPressure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonSecure_BackPressure)
 {
     const char *testName = "Sink_BackPressure";
     bool secureMode = false;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /****************************************************************
-* Concurrent Tunnel Non-Secure Tests
+* Concurrent Secure Tests
 ****************************************************************/
 /**
  * @brief Test the sink's ability to render decoded frames
  *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 007@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure)
-{
-    const char *testName = "Sink_Decode";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify EOS is received after eos pts to the sink.
- *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 008@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure_EOS)
-{
-    const char *testName = "Sink_EOS";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Video sink playback with underflow detection
- *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 009@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure_Underflow)
-{
-    const char *testName = "Sink_Underflow";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify onFlushComplete is received after flushing sink.
- *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 010@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure_Flush)
-{
-    const char *testName = "Sink_Flush";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 011@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure_DiscardFramesUntil)
-{
-    const char *testName = "Sink_DiscardFramesUntil";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Concurrent
- *        Modes: Tunnel, Non-Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 012@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_NonSecure_BackPressure)
-{
-    const char *testName = "Sink_BackPressure";
-    bool secureMode = false;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/****************************************************************
-* Concurrent Non-Tunnel Secure Tests
-****************************************************************/
-/**
- * @brief Test the sink's ability to render decoded frames
- *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 013@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure)
 {
     const char *testName = "Sink_Decode";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify EOS is received after eos pts to the sink.
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 014@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure_EOS)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure_EOS)
 {
     const char *testName = "Sink_EOS";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Video sink playback with underflow detection
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 015@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure_Underflow)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure_Underflow)
 {
     const char *testName = "Sink_Underflow";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify onFlushComplete is received after flushing sink.
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 016@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure_Flush)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure_Flush)
 {
     const char *testName = "Sink_Flush";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
 
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 017@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure_DiscardFramesUntil)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure_DiscardFramesUntil)
 {
     const char *testName = "Sink_DiscardFramesUntil";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /**
  * @brief Test to verify sink behavior when no clock is attched
  *        Type: Concurrent
- *        Modes: Non-Tunnel, Secure
+ *        Modes: Secure
  *
  * **Test Group ID:** 003@n
  * **Test Case ID:** 018@n
  */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_NonTunnel_Secure_BackPressure)
+UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Secure_BackPressure)
 {
     const char *testName = "Sink_BackPressure";
     bool secureMode = true;
-    bool isTunnel = false;
     bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/****************************************************************
-* Concurrent Tunnel Secure Tests
-****************************************************************/
-/**
- * @brief Test the sink's ability to render decoded frames
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 019@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure)
-{
-    const char *testName = "Sink_Decode";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify EOS is received after eos pts to the sink.
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 020@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure_EOS)
-{
-    const char *testName = "Sink_EOS";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Video sink playback with underflow detection
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 021@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure_Underflow)
-{
-    const char *testName = "Sink_Underflow";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify onFlushComplete is received after flushing sink.
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 022@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure_Flush)
-{
-    const char *testName = "Sink_Flush";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 023@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure_DiscardFramesUntil)
-{
-    const char *testName = "Sink_DiscardFramesUntil";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
-}
-
-/**
- * @brief Test to verify sink behavior when no clock is attched
- *        Type: Concurrent
- *        Modes: Tunnel, Secure
- *
- * **Test Group ID:** 003@n
- * **Test Case ID:** 024@n
- */
-UT_ADD_TEST(VTS_L3_VideoSink, VSink_Concurrent_Tunnel_Secure_BackPressure)
-{
-    const char *testName = "Sink_BackPressure";
-    bool secureMode = true;
-    bool isTunnel = true;
-    bool isConcurrent = true;
-    runSingleProcessTest(testName, secureMode, isTunnel, isConcurrent);
+    runSingleProcessTest(testName, secureMode, isConcurrent);
 }
 
 /** @} */ // End of VIDEO_SINK_HALTEST L3 File

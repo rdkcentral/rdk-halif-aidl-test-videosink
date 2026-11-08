@@ -173,6 +173,20 @@ extern void *gVideoSinkTestConfiguration;
         UT_ASSERT_EQUAL(status.exceptionCode(), Status::EX_NONE); \
     } while (0)
 
+/* Video decoder associated with the sink before start(): first decoder from the HFP, or
+ * IVideoDecoder::Id::EXTERNAL (non-HAL source) when the HFP declares none. */
+#define VIDEOSINK_DEFAULT_VIDEODECODER_ID() \
+    (gVideosinks_hfp.availableVideodecoders_hfp.empty() ? \
+        static_cast<int32_t>(IVideoDecoder::Id::EXTERNAL) : gVideosinks_hfp.availableVideodecoders_hfp.front())
+
+/* rdk-halif-aidl 0.23.0: setVideoDecoder() must be called before start() (tunnelled and non-tunnelled) */
+#define VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController) \
+    do { \
+        IVideoDecoder::Id _defaultDecoderId; \
+        _defaultDecoderId.value = VIDEOSINK_DEFAULT_VIDEODECODER_ID(); \
+        VIDEOSINK_CONTROLLER_SETVIDEODECODER_SUCCESS(videoSinkController, _defaultDecoderId); \
+    } while (0)
+
 #define VIDEOSINK_CONTROLLER_SETVIDEODECODER_FAILURE(videoSinkController,videodecoderID,exception) \
     do { \
         ::android::binder::Status status; \
