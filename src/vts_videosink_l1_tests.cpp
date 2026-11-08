@@ -1240,6 +1240,9 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg)
     std::vector<IVideoSink::Id> sinkIds;
     sp<IVideoSink> videoSink;
     videodecoderIds.push_back(IVideoDecoder::Id::UNDEFINED);
+    // EXTERNAL (-2) is a valid association for a non-HAL source (rdk-halif-aidl 0.23.0), so it must not
+    // be picked as the invalid lower bound below
+    videodecoderIds.push_back(IVideoDecoder::Id::EXTERNAL);
     VIDEOSINK_MANAGER_GETVIDEOSINKIDS(sinkIds);
 
     for (const auto &videoDecoderId : gVideosinks_hfp.availableVideodecoders_hfp)
@@ -1288,6 +1291,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         for (int32_t id : videodecoderIds)

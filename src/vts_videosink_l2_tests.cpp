@@ -285,6 +285,8 @@ UT_ADD_TEST(VTS_L2_VideoSink, TestStateTransitions)
         checkControllerCompleteStateTransition(controlListener, videosink::State::CLOSED, videosink::State::OPENING, videosink::State::READY);
 
         // Transition to STARTED state
+        // rdk-halif-aidl 0.23.0: a video decoder must be associated before start()
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
         checkCompleteStateTransition(videoSink,eventListener, videosink::State::READY, videosink::State::STARTING, videosink::State::STARTED);
         checkControllerCompleteStateTransition(controlListener, videosink::State::READY, videosink::State::STARTING, videosink::State::STARTED);
@@ -341,6 +343,8 @@ UT_ADD_TEST(VTS_L2_VideoSink, TestStateTransitions_multipleInstance)
         /* Get Video sink handle */
 
         // Transition to STARTED state
+        // rdk-halif-aidl 0.23.0: a video decoder must be associated before start()
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
         checkCompleteStateTransition(videoSink,eventListener, videosink::State::READY, videosink::State::STARTING, videosink::State::STARTED);
         checkControllerCompleteStateTransition(controlListener, videosink::State::READY, videosink::State::STARTING, videosink::State::STARTED);
@@ -436,6 +440,8 @@ UT_ADD_TEST(VTS_L2_VideoSink, TestAttachDetachClock)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         // Transition to STARTED state
+        // rdk-halif-aidl 0.23.0: a video decoder must be associated before start()
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         // Step 02: Attach valid clock in STARTED and verify
