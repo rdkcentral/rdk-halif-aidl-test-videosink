@@ -429,7 +429,7 @@ public:
 
                 videoDecoderTest decodeTest(decoderId, decoderHandle, decoderControlListener,
                                            decoderEventListener, mAVBufferManager, secureDecode,
-                                           kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached);
+                                           decoderConfig, mAVbufferHelper, isSinkAttached);
 
                 VideoSinkTest sinkTest(_sinkId, sinkHandle, controlListener, eventListener,
                                        decoderControlListener, mAVBufferManager, decoderId, clockId, decoderConfig,
@@ -442,6 +442,8 @@ public:
 
                 std::thread decodeThread(&videoDecoderTest::run, &decodeTest, true);
 
+                // No video plane is mapped, so no first frame rendered is expected (rdk-halif-aidl 0.23.0)
+                sinkTest.setFirstFrameRenderedExpected(false);
                 // The sink reads the vendor-selected mode on the first decoded frame and follows it
                 sinkTest.runWithDecoderMode();
 
@@ -548,6 +550,7 @@ public:
                 decoderEventListener->resetQueues();
 
                 VideoSinkTest* sink = sinkTest.get();
+                sink->setFirstFrameRenderedExpected(false);   // no video plane mapped
                 sinkThreads.emplace_back([sink]() { sink->runWithDecoderMode(); });
                 sinkTests.push_back(std::move(sinkTest));
             }
@@ -562,7 +565,7 @@ public:
                         sp<VideoDecoderControllerListener>::cast(decoderControlListener),
                         sp<VideoDecoderEventListener>::cast(decoderEventListener),
                         sp<IAVBuffer>::cast(mAVBufferManager),
-                        secure, kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached);
+                        secure, decoderConfig, mAVbufferHelper, isSinkAttached);
 
                 decoderThreads.emplace_back(&videoDecoderTest::run, decoderTest.get(), true);
 
@@ -612,7 +615,6 @@ public:
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor and cannot be requested.
      * The sink reads the decoder's mode (getCurrentOperationalMode()) on the first decoded frame and
      * follows it, so there is one test per scenario instead of a Tunnel / NonTunnel pair. */
-    static constexpr bool kTunnelModeNotRequested = false;
 
     void runSingleProcessTest(const char *testName, bool secureMode, bool concurrentMode)
     {

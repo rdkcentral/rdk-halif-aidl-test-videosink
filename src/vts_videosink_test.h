@@ -121,6 +121,9 @@ public:
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor; the sink reads the
      * decoder's operational mode on the first decoded frame and follows it. */
     void runWithDecoderMode ();
+    /* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
+     * Set false when no plane is mapped: the test then asserts that no first frame rendered arrives. */
+    void setFirstFrameRenderedExpected(bool expected) { mFirstFrameRenderedExpected = expected; }
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 
 private:
@@ -136,6 +139,7 @@ private:
     sp<IVideoSinkController> mVideoSinkController;
     std::set<int64_t> mReceivedPtsSet;
     bool mIsClockInUse = false;
+    bool mFirstFrameRenderedExpected = true;
     int mActualFramesReceived = 0;
     sp<AVClockControllerListener> mClockCtrlListener;
     sp<IAVClockController> mClockController;

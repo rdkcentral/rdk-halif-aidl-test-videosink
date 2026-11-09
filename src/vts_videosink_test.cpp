@@ -210,13 +210,21 @@ void VideoSinkTest::validateCallbacks()
     }
 
     /* Validate first frame rendered PTS */
-    std::vector<int64_t> firstFramePTS = mVideoSinkEventListener->getFirstPTS();
-    UT_ASSERT_EQUAL(firstFramePTS.size(), 1);
-    UT_ASSERT_EQUAL(firstFramePTS.empty() ? -1 : firstFramePTS.front(), mFirstFramePTS);
-
-    firstFramePTS = mVideoSinkControlListener->getFirstPTS();
-    UT_ASSERT_EQUAL(firstFramePTS.size(), 1);
-    UT_ASSERT_EQUAL(firstFramePTS.empty() ? -1 : firstFramePTS.front(), mFirstFramePTS);
+    std::vector<int64_t> eventFirstFramePTS = mVideoSinkEventListener->getFirstPTS();
+    std::vector<int64_t> controllerFirstFramePTS = mVideoSinkControlListener->getFirstPTS();
+    if (mFirstFrameRenderedExpected)
+    {
+        UT_ASSERT_EQUAL(eventFirstFramePTS.size(), 1);
+        UT_ASSERT_EQUAL(eventFirstFramePTS.empty() ? -1 : eventFirstFramePTS.front(), mFirstFramePTS);
+        UT_ASSERT_EQUAL(controllerFirstFramePTS.size(), 1);
+        UT_ASSERT_EQUAL(controllerFirstFramePTS.empty() ? -1 : controllerFirstFramePTS.front(), mFirstFramePTS);
+    }
+    else
+    {
+        /* No video plane is mapped: onFirstFrameRendered() must not be reported (rdk-halif-aidl 0.23.0) */
+        UT_ASSERT_EQUAL(eventFirstFramePTS.size(), 0) << "First frame rendered received but no video plane is mapped";
+        UT_ASSERT_EQUAL(controllerFirstFramePTS.size(), 0) << "First frame rendered received but no video plane is mapped";
+    }
 
     /* Validate EOS PTS */
     std::vector<int64_t> controllerEOSPTS = mVideoSinkControlListener->getEosPTS();
