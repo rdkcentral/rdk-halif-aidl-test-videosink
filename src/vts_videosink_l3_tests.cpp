@@ -442,8 +442,8 @@ public:
 
                 std::thread decodeThread(&videoDecoderTest::run, &decodeTest, true);
 
-                // Sink path follows the mode the vendor selects, read by the decoder after start()
-                sinkTest.run(vendorTunnelModeOf(decodeTest));
+                // The sink reads the vendor-selected mode on the first decoded frame and follows it
+                sinkTest.runWithDecoderMode();
 
                 executedAtLeastOne = true;
 
@@ -531,18 +531,6 @@ public:
                 return false;
             }
 
-            // Create the decoder test objects first (no HAL calls) so each sink can wait for its decoder's mode
-            for (int32_t i = 0; i < numInstances; ++i)
-            {
-                auto& [decoderId, decoderHandle, decoderControlListener, decoderEventListener, capabilities] = availableDecoderList[i];
-
-                decoderTests.push_back(make_unique<videoDecoderTest>(decoderId, decoderHandle,
-                        sp<VideoDecoderControllerListener>::cast(decoderControlListener),
-                        sp<VideoDecoderEventListener>::cast(decoderEventListener),
-                        sp<IAVBuffer>::cast(mAVBufferManager),
-                        secure, kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached));
-            }
-
             for(int32_t i = 0; i < numInstances; ++i)
             {
                 auto& [_sinkId, videoSink, videoSinkControlListener, videoSinkEventListener] = availableSinkList[i];
@@ -559,17 +547,26 @@ public:
                 decoderControlListener->resetQueues();
                 decoderEventListener->resetQueues();
 
-                videoDecoderTest* decoderTest = decoderTests[i].get();
                 VideoSinkTest* sink = sinkTest.get();
-                sinkThreads.emplace_back([sink, decoderTest]() { sink->run(vendorTunnelModeOf(*decoderTest)); });
+                sinkThreads.emplace_back([sink]() { sink->runWithDecoderMode(); });
                 sinkTests.push_back(std::move(sinkTest));
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-            for (auto& decoderTest : decoderTests)
+            for (int32_t i = 0; i < numInstances; ++i)
             {
+                auto& [decoderId, decoderHandle, decoderControlListener, decoderEventListener, capabilities] = availableDecoderList[i];
+
+                auto decoderTest = make_unique<videoDecoderTest>(decoderId, decoderHandle,
+                        sp<VideoDecoderControllerListener>::cast(decoderControlListener),
+                        sp<VideoDecoderEventListener>::cast(decoderEventListener),
+                        sp<IAVBuffer>::cast(mAVBufferManager),
+                        secure, kTunnelModeNotRequested, decoderConfig, mAVbufferHelper, isSinkAttached);
+
                 decoderThreads.emplace_back(&videoDecoderTest::run, decoderTest.get(), true);
+
+                decoderTests.push_back(move(decoderTest));
             }
 
             for (auto& t : decoderThreads)
@@ -613,23 +610,9 @@ public:
     }
 
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor and cannot be requested.
-     * The mode is read inside the test after the decoder's start() (getCurrentOperationalMode())
-     * and the sink follows it, so there is one test per scenario instead of a Tunnel / NonTunnel pair. */
+     * The sink reads the decoder's mode (getCurrentOperationalMode()) on the first decoded frame and
+     * follows it, so there is one test per scenario instead of a Tunnel / NonTunnel pair. */
     static constexpr bool kTunnelModeNotRequested = false;
-    static constexpr std::chrono::milliseconds kOperationalModeTimeout{15000};
-
-    static std::function<bool(bool&)> vendorTunnelModeOf(videoDecoderTest& decodeTest)
-    {
-        return [&decodeTest](bool& isTunnel) {
-            OperationalMode mode;
-            if (!decodeTest.waitForOperationalMode(mode, kOperationalModeTimeout))
-            {
-                return false;
-            }
-            isTunnel = (mode == OperationalMode::TUNNELLED);
-            return true;
-        };
-    }
 
     void runSingleProcessTest(const char *testName, bool secureMode, bool concurrentMode)
     {

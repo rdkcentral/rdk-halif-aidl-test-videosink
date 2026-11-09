@@ -64,55 +64,16 @@
 
 #include "vts_videosink_test.h"
 
+/* Tunnel / non-tunnel requested by the caller (kept for callers that still choose the mode) */
 void VideoSinkTest::run ( bool isTunnel )
 {
-    run([isTunnel](bool& tunnel) { tunnel = isTunnel; return true; });
+    runSink(isTunnel ? SinkMode::TUNNEL : SinkMode::NON_TUNNEL);
 }
 
-void VideoSinkTest::run ( const std::function<bool(bool& isTunnel)>& resolveTunnelMode )
+/* rdk-halif-aidl 0.23.0: the mode is selected by the vendor and read from the decoder on the first frame */
+void VideoSinkTest::runWithDecoderMode ()
 {
-    try
-    {
-        /*Reset the Flush, EOS, Underflow and Resume Counts*/
-        mVideoSinkControlListener->resetFirstFrameRendered();
-        mVideoSinkEventListener->resetFirstFrameRendered();
-        mVideoSinkControlListener->resetUnderflow();
-        mVideoSinkEventListener->resetUnderflow();
-        mVideoSinkControlListener->resetResumed();
-        mVideoSinkEventListener->resetResumed();
-        mVideoSinkControlListener->resetEos();
-        mVideoSinkEventListener->resetEos();
-        mVideoSinkControlListener->resetFlushComplete();
-        mVideoSinkEventListener->resetFlushComplete();
-
-        setupVideoSink();
-    }
-    catch (const std::exception& ex)
-    {
-        UT_LOG_ERROR("[SinkID: %d] Exception during sink setup: %s", mSinkId.value, ex.what());
-        UT_ASSERT_TRUE(false);
-        return;
-    }
-
-    bool isTunnel = false;
-    if (!resolveTunnelMode(isTunnel))
-    {
-        UT_LOG_ERROR("[SinkID: %d] Unable to determine the operational mode for stream: %s",
-                     mSinkId.value, mTestConfiguration.input.c_str());
-        UT_ASSERT_TRUE(false) << "Unable to determine the vendor-selected operational mode";
-        tearDownVideoSink();
-        return;
-    }
-    UT_LOG_INFO("[SinkID: %d] Running %s sink path", mSinkId.value, isTunnel ? "tunnel" : "non-tunnel");
-
-    if(!isTunnel)
-    {
-        videoSinkNonTunnelMode();
-    }
-    else
-    {
-        videoSinkTunnelMode();
-    }
+    runSink(SinkMode::FROM_DECODER);
 }
 
 bool VideoSinkTest::getSinkPropertyInt(videosink::Property property, int32_t& outValue)
@@ -486,10 +447,24 @@ bool VideoSinkTest::waitForDecoderEndOfStream()
     return false;
 }
 
-void VideoSinkTest::videoSinkNonTunnelMode()
+void VideoSinkTest::runSink(SinkMode sinkMode)
 {
     try
     {
+        /*Reset the Flush, EOS, Underflow and Resume Counts*/
+        mVideoSinkControlListener->resetFirstFrameRendered();
+        mVideoSinkEventListener->resetFirstFrameRendered();
+        mVideoSinkControlListener->resetUnderflow();
+        mVideoSinkEventListener->resetUnderflow();
+        mVideoSinkControlListener->resetResumed();
+        mVideoSinkEventListener->resetResumed();
+        mVideoSinkControlListener->resetEos();
+        mVideoSinkEventListener->resetEos();
+        mVideoSinkControlListener->resetFlushComplete();
+        mVideoSinkEventListener->resetFlushComplete();
+
+        setupVideoSink();
+
         UT_LOG_INFO("[SinkID: %d] Start of Testing Stream: %s", mSinkId.value, mTestConfiguration.input.c_str());
         DecodedVideoFrame_t decodedFrame;
         uint32_t frameDurationMs = 50; // Default to 50 ms if frame rate is not available
@@ -499,6 +474,7 @@ void VideoSinkTest::videoSinkNonTunnelMode()
 
         mFirstFramePTS = mTestConfiguration.sink_discardFramesUntilPts;
         mFrameCount = 0;
+        bool isTunnel = (sinkMode == SinkMode::TUNNEL);
 
         while (true)
         {
@@ -527,8 +503,29 @@ void VideoSinkTest::videoSinkNonTunnelMode()
 
             if (mFrameCount == 1)
             {
+                if (sinkMode == SinkMode::FROM_DECODER)
+                {
+                    /* The decoder is started once it outputs a frame, so its operational mode can be queried now */
+                    sp<IVideoDecoder> videoDecoder;
+                    OperationalMode operationalMode = OperationalMode::NON_TUNNELLED;
+                    if (gVideoDecoderManager != nullptr && gVideoDecoderManager->getVideoDecoder(mDecoderId, &videoDecoder).isOk() &&
+                        videoDecoder != nullptr)
+                    {
+                        VIDEODECODER_GET_OPERATIONALMODE_SUCCESS(videoDecoder, operationalMode);
+                    }
+                    else
+                    {
+                        UT_LOG_ERROR("[SinkID: %d] Unable to get video decoder [%d] to read its operational mode", mSinkId.value, mDecoderId.value);
+                        UT_ASSERT_TRUE(false);
+                    }
+                    isTunnel = (operationalMode == OperationalMode::TUNNELLED);
+                }
+                UT_LOG_INFO("[SinkID: %d] Running %s sink path", mSinkId.value, isTunnel ? "tunnel" : "non-tunnel");
+
                 if(mTestConfiguration.sink_discardFramesUntilPts == -1)
                     mFirstFramePTS = decodedFrame.framePTS;
+                else if (isTunnel)
+                    mFirstFramePTS = -1;
 
                 if(!decodedFrame.metadata)
                 {
@@ -545,7 +542,18 @@ void VideoSinkTest::videoSinkNonTunnelMode()
                 mTestConfiguration.flushPts = 0;
             }
 
-            if (decodedFrame.metadata)
+            /* NON_TUNNELLED: decoded frames are returned with a valid buffer handle and queued to the sink.
+             * TUNNELLED: the vendor feeds the sink internally and the frame handle is -1. */
+            if (sinkMode == SinkMode::FROM_DECODER &&
+                ((!isTunnel && bufferHandle == -1) || (isTunnel && bufferHandle != -1)))
+            {
+                UT_LOG_ERROR("[SinkID: %d] %s frame received with %s buffer handle, skipping the frame", mSinkId.value,
+                             isTunnel ? "Tunnelled" : "Non-tunnelled", isTunnel ? "a valid" : "an invalid");
+                UT_ASSERT_TRUE(false);
+                continue;
+            }
+
+            if (!isTunnel && decodedFrame.metadata)
             {
                 const auto& src = *(decodedFrame.metadata);
                 copyMetaData(src, metadata);
@@ -563,6 +571,13 @@ void VideoSinkTest::videoSinkNonTunnelMode()
                 UT_LOG_DEBUG("[SinkID: %d] Injecting delay at PTS %lld to simulate underflow",
                              mSinkId.value, static_cast<long long>(pts));
                 std::this_thread::sleep_for(std::chrono::milliseconds(2 * frameDurationMs));
+            }
+
+            mSignalEOSPTS = pts;
+
+            if (isTunnel)
+            {
+                continue;
             }
 
             // Queue the frame to the video sink
@@ -589,8 +604,6 @@ void VideoSinkTest::videoSinkNonTunnelMode()
                 AVBUFFER_FREE_SUCCESS(mAVBufferManager, bufferHandle);
                 break;
             }
-
-            mSignalEOSPTS = pts;
 
             /* Check for end-of-stream */
             if(mTestConfiguration.eosPts >= 0 && pts == static_cast<int64_t>(mTestConfiguration.eosPts))
@@ -619,108 +632,25 @@ void VideoSinkTest::videoSinkNonTunnelMode()
 
         //TODO: Check if this sleep required.
         // It is added to ensure that the all event is received before validating callbacks and metrics.
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-        validateCallbacks();
-        validateMetrics();
-
-        tearDownVideoSink();
-    }
-    catch (const std::exception& ex) {
-        UT_LOG_ERROR("[SinkID: %d] Exception in videoSinkNonTunnelMode: %s", mSinkId.value, ex.what());
-        UT_ASSERT_TRUE(false);
-    } catch (...) {
-        UT_LOG_ERROR("[SinkID: %d] Unknown exception in videoSinkNonTunnelMode", mSinkId.value);
-        UT_ASSERT_TRUE(false);
-    }
-}
-
-void VideoSinkTest::videoSinkTunnelMode()
-{
-    try
-    {
-        UT_LOG_INFO("[SinkID: %d] Start of Testing Stream: %s", mSinkId.value, mTestConfiguration.input.c_str());
-        DecodedVideoFrame_t decodedFrame;
-        uint32_t frameDurationMs = 50; // Default to 50 ms if frame rate is not available
-
-        /*Wait up to 500 ms for a frame, and tolerate a few consecutive misses*/
-        const int64_t frameTimeoutMs = 5000; // Wait up to 500 ms for a frame
-
-        mFirstFramePTS = -1;
-        mFrameCount = 0;
-
-        while (true)
+        if (!isTunnel)
         {
-            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
-            {
-                if (!waitForDecoderEndOfStream())
-                {
-                    tearDownVideoSink();
-                    return;
-                }
-
-                // EOS can arrive immediately before the final decoded frame is queued.
-                if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(0)))
-                {
-                    break;
-                }
-            }
-
-            int64_t pts = decodedFrame.framePTS;
-
-            // Use fully qualified name to avoid ambiguity
-            videodecoder::FrameMetadata metadata{};
-
-            mFrameCount++;
-
-            if (mFrameCount == 1)
-            {
-                if(mTestConfiguration.sink_discardFramesUntilPts == -1)
-                    mFirstFramePTS = decodedFrame.framePTS;
-
-                if(!decodedFrame.metadata)
-                {
-                    UT_LOG_ERROR("[SinkID: %d] First frame received without metadata, skipping the frame", mSinkId.value);
-                    UT_ASSERT_TRUE(false);
-                    break;
-                }
-            }
-
-            if(mTestConfiguration.flushPts > 0 &&
-               pts >= static_cast<int64_t>(mTestConfiguration.flushPts))
-            {
-                VIDEOSINK_FLUSH_SUCCESS(mVideoSinkController, true);
-                mTestConfiguration.flushPts = 0;
-            }
-
-            // Simulate underflow
-            if (mTestConfiguration.sink_underflow_pts >= 0 &&
-                pts == static_cast<int64_t>(mTestConfiguration.sink_underflow_pts))
-            {
-                UT_LOG_DEBUG("[SinkID: %d] Injecting delay at PTS %lld to simulate underflow",
-                             mSinkId.value, static_cast<long long>(pts));
-                std::this_thread::sleep_for(std::chrono::milliseconds(2 * frameDurationMs));
-            }
-
-            mSignalEOSPTS = pts;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
-        /* Signal EOS, exptected EOS PTS callback is at mSignalEOSPTS */
-        VIDEOSINK_SIGNAL_EOS_SUCCESS(mVideoSinkController);
-
         validateCallbacks();
         validateMetrics();
 
         tearDownVideoSink();
     }
     catch (const std::exception& ex) {
-        UT_LOG_ERROR("[SinkID: %d] Exception in videoSinkNonTunnelMode: %s", mSinkId.value, ex.what());
+        UT_LOG_ERROR("[SinkID: %d] Exception in runSink: %s", mSinkId.value, ex.what());
         UT_ASSERT_TRUE(false);
     } catch (...) {
-        UT_LOG_ERROR("[SinkID: %d] Unknown exception in videoSinkNonTunnelMode", mSinkId.value);
+        UT_LOG_ERROR("[SinkID: %d] Unknown exception in runSink", mSinkId.value);
         UT_ASSERT_TRUE(false);
     }
 }
+
 
 /** @} */ // End of VIDEO_SINK_HALTEST_CLASS
 /** @} */ // End of VIDEO_SINK_HALTEST
