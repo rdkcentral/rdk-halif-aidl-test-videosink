@@ -105,8 +105,17 @@ void notifyStateChangedLocked(int32_t sinkId, State oldState, State newState)
     }
 }
 
+/* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
+ * The mock has no plane control, so no plane is ever mapped and the callback is not reported. */
+static constexpr bool kMockVideoPlaneMapped = false;
+
 void notifyFirstFrameRenderedLocked(int32_t sinkId, int64_t nsPresentationTime)
 {
+    if (!kMockVideoPlaneMapped)
+    {
+        LOG_INFO("onFirstFrameRendered not reported for ID %d: no video plane mapped (PTS %ld)", sinkId, nsPresentationTime);
+        return;
+    }
     if (g_event_listeners[sinkId]) {
         g_event_listeners[sinkId]->onFirstFrameRendered(nsPresentationTime);
     }

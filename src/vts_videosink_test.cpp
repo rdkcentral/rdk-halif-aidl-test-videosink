@@ -307,7 +307,8 @@ void VideoSinkTest::validateMetrics()
     std::optional<PropertyValue> propertyValue;
     videosink::Property property = videosink::Property::METRIC_FRAMES_RECEIVED;
 
-    int32_t actualFramesPresented = mFrameCount - mTestConfiguration.frames_to_discard;
+    /* METRIC_FRAMES_PRESENTED counts frames presented to the display, so it is 0 when no video plane is mapped */
+    int32_t actualFramesPresented = mFirstFrameRenderedExpected ? (mFrameCount - mTestConfiguration.frames_to_discard) : 0;
 
     /* Validate frames received */
     VIDEOSINK_GET_PROPERTY_SUCCESS(mSinkHandle, property, propertyValue);
@@ -542,6 +543,15 @@ void VideoSinkTest::run()
                 UT_LOG_INFO("[SinkID: %d] Running %s sink path", mSinkId.value,
                             (operationalMode == OperationalMode::TUNNELLED) ? "tunnel" : "non-tunnel");
 
+                /* Client-queue back-pressure needs NON_TUNNELLED. In TUNNELLED mode the clock (left stopped by
+                 * setupClock() for back-pressure) is started here so the sink can consume and reach EOS. */
+                if (operationalMode == OperationalMode::TUNNELLED && mTestConfiguration.sink_backpressure && !mIsClockInUse)
+                {
+                    UT_LOG_WARNING("[SinkID: %d] Sink back-pressure is not applicable in TUNNELLED mode; running as normal playback",
+                                   mSinkId.value);
+                    AVCLOCK_START_SUCCESS(mClock, mClockController, true);
+                }
+
                 if(mTestConfiguration.sink_discardFramesUntilPts == -1)
                     mFirstFramePTS = decodedFrame.framePTS;
                 else if (operationalMode == OperationalMode::TUNNELLED)
@@ -599,12 +609,8 @@ void VideoSinkTest::run()
             {
                 break;
             }
-            if (isTunnel)
-            {
-                continue;   // nothing was queued, so the EOS point and underflow checks do not apply
-            }
 
-            /* Check for end-of-stream */
+            /* Check for end-of-stream (both modes: the client signals EOS to the sink, then flushes) */
             if(mTestConfiguration.eosPts >= 0 && pts == static_cast<int64_t>(mTestConfiguration.eosPts))
             {
                 if (!mDecoderControllerListener->waitForEndOfStream(1, std::chrono::milliseconds(5000)))
@@ -617,11 +623,19 @@ void VideoSinkTest::run()
 
                 VIDEOSINK_SIGNAL_EOS_SUCCESS(mVideoSinkController);
 
-                /* After EOS signal, any further attempts to queue frames should fail */
-                VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_FAILURE(mVideoSinkController, pts, bufferHandle, metadata, Status::EX_ILLEGAL_STATE);
+                /* After EOS signal, any further attempts to queue frames should fail (client queue: non-tunnel only) */
+                if (!isTunnel)
+                {
+                    VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_FAILURE(mVideoSinkController, pts, bufferHandle, metadata, Status::EX_ILLEGAL_STATE);
+                }
 
                 /* To queue the frames after EOS, flush the video sink */
                 VIDEOSINK_FLUSH_SUCCESS(mVideoSinkController, true);
+            }
+
+            if (isTunnel)
+            {
+                continue;   // nothing was queued by the client, so the underflow check does not apply
             }
             validateUnderflowResume(pts);
         }
