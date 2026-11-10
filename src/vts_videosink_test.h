@@ -93,6 +93,7 @@ class VideoSinkTest
 public:
     VideoSinkTest(IVideoSink::Id sinkId,
         sp<IVideoSink> sinkHandle,
+        sp<IVideoDecoder> decoderHandle,
         sp<VideoSinkControllerListener> VideoSinkControllerListener,
         sp<VideoSinkEventListener> VideoSinkEventListner,
         sp<VideoDecoderControllerListener> decoderControllerListener,
@@ -103,6 +104,7 @@ public:
     {
         mSinkId = sinkId;
         mSinkHandle = sinkHandle;
+        mDecoderHandle = decoderHandle;
         mVideoSinkControlListener = VideoSinkControllerListener;
         mVideoSinkEventListener = VideoSinkEventListner;
         mDecoderControllerListener = decoderControllerListener;
@@ -117,10 +119,9 @@ public:
         mFrameCount = 0;
     }
 
-    void run ( bool isTunnel );
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor; the sink reads the
      * decoder's operational mode on the first decoded frame and follows it. */
-    void runWithDecoderMode ();
+    void run ();
     /* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
      * Set false when no plane is mapped: the test then asserts that no first frame rendered arrives. */
     void setFirstFrameRenderedExpected(bool expected) { mFirstFrameRenderedExpected = expected; }
@@ -129,6 +130,7 @@ public:
 private:
     IVideoSink::Id mSinkId;
     sp<IVideoSink> mSinkHandle;
+    sp<IVideoDecoder> mDecoderHandle;
     sp<VideoSinkControllerListener> mVideoSinkControlListener;
     sp<VideoSinkEventListener> mVideoSinkEventListener;
     sp<VideoDecoderControllerListener> mDecoderControllerListener;
@@ -150,8 +152,6 @@ private:
 
     float getBytesPerPixelMultiplier(const std::string& basePixelFormat, int colorDepth) const;
     PixelFormat getPixelFormatEnum(const std::string& basePixelFormat);
-    enum class SinkMode { NON_TUNNEL, TUNNEL, FROM_DECODER };
-    void runSink(SinkMode sinkMode);
     void setupClock();
     void tearDownClock();
     void validateCallbacks();
@@ -162,6 +162,8 @@ private:
     void tearDownVideoSink();
     void copyMetaData(const videodecoder::FrameMetadata& src, videodecoder::FrameMetadata& dst);
     bool validateSinkBackPressure(int64_t bufferHandle, int64_t pts, videodecoder::FrameMetadata& metadata);
+    bool queueDecodedFrameIfNonTunnel(const DecodedVideoFrame_t& decodedFrame, OperationalMode operationalMode,
+                                      videodecoder::FrameMetadata& metadata, uint32_t frameDurationMs);
 };
 
 #endif //__VTS_VIDEOSINK_TEST_H__

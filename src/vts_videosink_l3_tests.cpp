@@ -96,183 +96,6 @@ public:
     sp<IAVBuffer> mAVBufferManager;
     IAVBufferHelper* mAVbufferHelper;
 
-    const decoder_t* getDecoderHfpCapabilities(const IVideoDecoder::Id& decoderId) const
-    {
-        auto it = std::find_if(gVideodecoders_hfp.begin(),
-                               gVideodecoders_hfp.end(),
-                               [&decoderId](const decoder_t& item) {
-                                   return item.id == decoderId.value;
-                               });
-
-        if (it == gVideodecoders_hfp.end())
-        {
-            return nullptr;
-        }
-
-        return &(*it);
-    }
-
-    bool checkDecoderSupportsConfig(const IVideoDecoder::Id& decoderId, const videodecoder::Capabilities* capabilities,
-                                    const videoDecoderTestConfiguration_t& decoderConfig, bool secureDecode)
-    {
-        auto hfpIt = std::find_if(gVideodecoders_hfp.begin(), gVideodecoders_hfp.end(),
-            [&decoderId](const decoder_t& item) { return item.id == decoderId.value; });
-        if (hfpIt == gVideodecoders_hfp.end())
-        {
-            UT_LOG_WARNING("[DecoderID: %d] Not available in HFP", decoderId.value);
-            return false;
-        }
-        const decoder_t& hfpDecoder = *hfpIt;
-
-        auto supportsConfigFromHfp = [&](const char* fallbackReason) -> bool
-        {
-            if (secureDecode && !hfpDecoder.supportsSecure)
-            {
-                UT_LOG_WARNING("Decoder [%d] doesn't support secure decoding (HFP fallback)", decoderId.value);
-                return false;
-            }
-
-            auto hfpCodecIt = std::find_if(hfpDecoder.supportedCodecs.begin(), hfpDecoder.supportedCodecs.end(),
-                [&decoderConfig](const CodecCapability& cap) { return cap.codec == decoderConfig.codec; });
-            if (hfpCodecIt == hfpDecoder.supportedCodecs.end())
-            {
-                UT_LOG_WARNING("Decoder [%d] doesn't support Codec [%s] in HFP",
-                               decoderId.value,
-                               videodecoder::toString(decoderConfig.codec).c_str());
-                return false;
-            }
-
-            if (hfpCodecIt->supportedOutputPixelFormats.empty())
-            {
-                UT_LOG_WARNING("Decoder [%d] HFP missing supportedOutputPixelFormats for codec [%s]",
-                               decoderId.value,
-                               videodecoder::toString(decoderConfig.codec).c_str());
-                return false;
-            }
-
-            if (std::find(hfpCodecIt->supportedOutputPixelFormats.begin(),
-                          hfpCodecIt->supportedOutputPixelFormats.end(),
-                          decoderConfig.pixelFormat) == hfpCodecIt->supportedOutputPixelFormats.end())
-            {
-                UT_LOG_INFO("Decoder [%d] skipping stream [%s]: pixel format [%s] unsupported in HFP",
-                            decoderId.value,
-                            decoderConfig.streamName.c_str(),
-                            videodecoder::toString(decoderConfig.pixelFormat).c_str());
-                return false;
-            }
-
-            if (decoderConfig.codedWidth > hfpCodecIt->maxFrameWidth ||
-                decoderConfig.codedHeight > hfpCodecIt->maxFrameHeight)
-            {
-                UT_LOG_INFO("Decoder [%d] skipping stream [%s]: resolution %dx%d exceeds HFP capability %dx%d",
-                            decoderId.value,
-                            decoderConfig.streamName.c_str(),
-                            decoderConfig.codedWidth,
-                            decoderConfig.codedHeight,
-                            hfpCodecIt->maxFrameWidth,
-                            hfpCodecIt->maxFrameHeight);
-                return false;
-            }
-
-            if (decoderConfig.frameRateDenominator > 0)
-            {
-                uint32_t streamFps = decoderConfig.frameRateNumerator / decoderConfig.frameRateDenominator;
-                if (streamFps > static_cast<uint32_t>(hfpCodecIt->maxFrameRate))
-                {
-                    UT_LOG_INFO("Decoder [%d] skipping stream [%s]: frame rate %u fps exceeds HFP capability %d fps",
-                                decoderId.value,
-                                decoderConfig.streamName.c_str(),
-                                streamFps,
-                                hfpCodecIt->maxFrameRate);
-                    return false;
-                }
-            }
-
-            UT_LOG_WARNING("Decoder [%d] using HFP fallback for stream [%s] because %s",
-                           decoderId.value,
-                           decoderConfig.streamName.c_str(),
-                           fallbackReason);
-            return true;
-        };
-
-        if (capabilities == nullptr)
-        {
-            return supportsConfigFromHfp("decoder getCapabilities is unavailable");
-        }
-
-        if (secureDecode && !capabilities->supportsSecure)
-        {
-            UT_LOG_WARNING("Decoder doesn't support secure decoding");
-            return false;
-        }
-
-        if (capabilities->supportedCodecs.empty())
-        {
-            return supportsConfigFromHfp("decoder getCapabilities missing supportedCodecs");
-        }
-
-        auto codecIt = std::find_if(capabilities->supportedCodecs.begin(), capabilities->supportedCodecs.end(),
-                                    [&decoderConfig](const videodecoder::CodecCapabilities& cap) { return cap.codec == decoderConfig.codec; });
-        if (codecIt == capabilities->supportedCodecs.end())
-        {
-            UT_LOG_WARNING("Decoder doesn't support Codec [%s]", videodecoder::toString(decoderConfig.codec).c_str());
-            return false;
-        }
-
-        if (codecIt->supportedOutputPixelFormats.empty())
-        {
-            UT_LOG_INFO(
-                "Decoder [%d] skipping stream [%s]: decoder getCapabilities missing supportedOutputPixelFormats",
-                 decoderId.value,
-                 decoderConfig.streamName.c_str());
-            return supportsConfigFromHfp("decoder getCapabilities missing supportedOutputPixelFormats");
-        }
-
-        if (std::find(codecIt->supportedOutputPixelFormats.begin(),
-                      codecIt->supportedOutputPixelFormats.end(),
-                      decoderConfig.pixelFormat) == codecIt->supportedOutputPixelFormats.end())
-        {
-            UT_LOG_INFO(
-                "Decoder [%d] skipping stream [%s]: pixel format [%s] unsupported",
-                 decoderId.value,
-                 decoderConfig.streamName.c_str(),
-                 videodecoder::toString(decoderConfig.pixelFormat).c_str());
-            return false;
-        }
-
-        if (decoderConfig.codedWidth > codecIt->maxFrameWidth ||
-            decoderConfig.codedHeight > codecIt->maxFrameHeight)
-        {
-            UT_LOG_INFO(
-                "Decoder [%d] skipping stream [%s]: resolution %dx%d exceeds capability %dx%d",
-                 decoderId.value,
-                 decoderConfig.streamName.c_str(),
-                 decoderConfig.codedWidth,
-                 decoderConfig.codedHeight,
-                 codecIt->maxFrameWidth,
-                 codecIt->maxFrameHeight);
-            return false;
-        }
-
-        if (decoderConfig.frameRateDenominator > 0)
-        {
-            uint32_t streamFps =
-                decoderConfig.frameRateNumerator / decoderConfig.frameRateDenominator;
-
-            if (streamFps > static_cast<uint32_t>(codecIt->maxFrameRate))
-            {
-                UT_LOG_INFO(
-                    "Decoder [%d] skipping stream [%s]: frame rate %u fps exceeds capability %d fps",
-                     decoderId.value,
-                     decoderConfig.streamName.c_str(),
-                     streamFps,
-                     codecIt->maxFrameRate);
-                return false;
-            }
-        }
-        return true;
-    }
-
     bool isVideoSinkUsable(const IVideoSink::Id& sinkId) const
     {
         return std::find(gVideosinks_hfp.availableVideoSinks_hfp.begin(), gVideosinks_hfp.availableVideoSinks_hfp.end(), sinkId.value) != gVideosinks_hfp.availableVideoSinks_hfp.end();
@@ -378,7 +201,7 @@ public:
     bool runSequentialSink(const videoDecoderTestConfiguration_t& decoderConfig,
                            bool secureDecode)
     {
-        bool executedAtLeastOne = false;
+        bool isTestExecuted = false;
         // Find a usable decoder
         IVideoDecoder::Id decoderId;
         sp<IVideoDecoder> decoderHandle;
@@ -388,7 +211,6 @@ public:
 
         for (const auto& [_decoderId, _decoderHandle, _controlListener, _eventListener, _capabilities] : mVideoDecoderList)
         {
-            std::string unsupportedReason;
             if (!checkDecoderSupportsConfig(_decoderId, _capabilities, decoderConfig, secureDecode))
             {
                 UT_LOG_INFO("[DecoderID: %d] Doesn't support the requested configuration, skipping.", _decoderId.value);
@@ -406,6 +228,13 @@ public:
         if (!foundDecoder)
         {
             UT_LOG_WARNING("No usable decoder found for test configuration '%s', skipping.", decoderConfig.input.c_str());
+            return false;
+        }
+
+        if (gVideosinks_hfp.availableClocks_hfp.empty())
+        {
+            UT_ASSERT_TRUE(false);
+            UT_LOG_WARNING("No available clock found for the given test configuration.");
             return false;
         }
 
@@ -431,7 +260,7 @@ public:
                                            decoderEventListener, mAVBufferManager, secureDecode,
                                            decoderConfig, mAVbufferHelper, isSinkAttached);
 
-                VideoSinkTest sinkTest(_sinkId, sinkHandle, controlListener, eventListener,
+                VideoSinkTest sinkTest(_sinkId, sinkHandle, decoderHandle, controlListener, eventListener,
                                        decoderControlListener, mAVBufferManager, decoderId, clockId, decoderConfig,
                                        isClockInUse);
 
@@ -445,9 +274,9 @@ public:
                 // No video plane is mapped, so no first frame rendered is expected (rdk-halif-aidl 0.23.0)
                 sinkTest.setFirstFrameRenderedExpected(false);
                 // The sink reads the vendor-selected mode on the first decoded frame and follows it
-                sinkTest.runWithDecoderMode();
+                sinkTest.run();
 
-                executedAtLeastOne = true;
+                isTestExecuted = true;
 
                 if (decodeThread.joinable())
                 {
@@ -471,13 +300,13 @@ public:
             return false;
         }
 
-        return executedAtLeastOne;
+        return isTestExecuted;
     }
 
     bool runConcurrentSink(const videoDecoderTestConfiguration_t& decoderConfig,
                            bool secure)
     {
-        bool executedAtLeastOne = false;
+        bool isTestExecuted = false;
         try
         {
             std::vector<std::thread> threads;
@@ -516,19 +345,16 @@ public:
             int32_t numInstances = std::min({availableDecoderCount, availableSinkCount, availableClockCount});
             if (availableDecoderCount == 0)
             {
-                UT_ASSERT_TRUE(false);
                 UT_LOG_WARNING("No usable decoder found for the given test configuration, skipping concurrent test.");
                 return false;
             }
             if (availableSinkCount == 0)
             {
-                UT_ASSERT_TRUE(false);
                 UT_LOG_WARNING("No usable sink found for the given test configuration, skipping concurrent test.");
                 return false;
             }
             if (availableClockCount == 0)
             {
-                UT_ASSERT_TRUE(false);
                 UT_LOG_WARNING("No available clock found for the given test configuration, skipping concurrent test.");
                 return false;
             }
@@ -541,7 +367,7 @@ public:
                 IAVClock::Id clockId;
                 clockId.value = gVideosinks_hfp.availableClocks_hfp[i];
 
-                auto sinkTest = std::make_unique<VideoSinkTest>(_sinkId, videoSink,
+                auto sinkTest = std::make_unique<VideoSinkTest>(_sinkId, videoSink, decoderHandle,
                                     videoSinkControlListener, videoSinkEventListener,
                                     decoderControlListener, mAVBufferManager, decoderId, clockId,
                                     decoderConfig, isClockInUse);
@@ -551,7 +377,7 @@ public:
 
                 VideoSinkTest* sink = sinkTest.get();
                 sink->setFirstFrameRenderedExpected(false);   // no video plane mapped
-                sinkThreads.emplace_back([sink]() { sink->runWithDecoderMode(); });
+                sinkThreads.emplace_back(&VideoSinkTest::run, sink);
                 sinkTests.push_back(std::move(sinkTest));
             }
 
@@ -583,7 +409,7 @@ public:
                     t.join();
             }
 
-            executedAtLeastOne = true;
+            isTestExecuted = true;
 
             for (auto& decoderTest : decoderTests)
             {
@@ -609,7 +435,7 @@ public:
             UT_ASSERT_TRUE(false);
             return false;
         }
-        return executedAtLeastOne;
+        return isTestExecuted;
     }
 
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor and cannot be requested.
@@ -630,7 +456,7 @@ public:
             return;
         }
 
-        bool executedAnyConfig = false;
+        bool isTestExecuted = false;
 
         for (size_t i = 0; i < sinkConfigs.size(); ++i)
         {
@@ -641,17 +467,18 @@ public:
             UT_LOG_INFO("=====================================================================================");
             if (concurrentMode)
             {
-                executedAnyConfig = runConcurrentSink(sinkConfig, secureMode) || executedAnyConfig;
+                isTestExecuted = runConcurrentSink(sinkConfig, secureMode) || isTestExecuted;
             }
             else
             {
-                executedAnyConfig = runSequentialSink(sinkConfig, secureMode) || executedAnyConfig;
+                isTestExecuted = runSequentialSink(sinkConfig, secureMode) || isTestExecuted;
             }
         }
 
-        if (!executedAnyConfig)
+        if (!isTestExecuted)
         {
-            GTEST_SKIP() << "No usable decoder/sink combination for this test configuration (capability filtered)";
+            UT_LOG_INFO("Skipping test '%s': No valid test configuration executed", testName);
+            GTEST_SKIP() << "No valid test configuration executed";
         }
     }
 

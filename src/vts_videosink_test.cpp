@@ -64,16 +64,41 @@
 
 #include "vts_videosink_test.h"
 
-/* Tunnel / non-tunnel requested by the caller (kept for callers that still choose the mode) */
-void VideoSinkTest::run ( bool isTunnel )
+/* NON_TUNNELLED: queue the decoded frame to the sink (with back-pressure handling if configured).
+ * TUNNELLED: the vendor feeds the sink internally, so nothing is queued.
+ * Returns false if the frame could not be queued (the buffer is freed and the test is failed). */
+bool VideoSinkTest::queueDecodedFrameIfNonTunnel(const DecodedVideoFrame_t& decodedFrame, OperationalMode operationalMode,
+                                                 videodecoder::FrameMetadata& metadata, uint32_t frameDurationMs)
 {
-    runSink(isTunnel ? SinkMode::TUNNEL : SinkMode::NON_TUNNEL);
-}
+    if (operationalMode == OperationalMode::TUNNELLED)
+    {
+        return true;
+    }
 
-/* rdk-halif-aidl 0.23.0: the mode is selected by the vendor and read from the decoder on the first frame */
-void VideoSinkTest::runWithDecoderMode ()
-{
-    runSink(SinkMode::FROM_DECODER);
+    const int64_t pts = decodedFrame.framePTS;
+    const int64_t bufferHandle = decodedFrame.frameAVBufferHandle;
+    bool queueSucess = false;
+
+    if(mTestConfiguration.sink_backpressure)
+    {
+        queueSucess = validateSinkBackPressure(bufferHandle, pts, metadata);
+    }
+    else
+    {
+        VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_SUCCESS(mVideoSinkController, pts, bufferHandle, metadata, queueSucess);
+    }
+
+    if(!queueSucess)
+    {
+        UT_LOG_ERROR("[SinkID: %d] Failed to queue frame with PTS: %lld", mSinkId.value, pts);
+        UT_ASSERT_TRUE(false);
+        AVBUFFER_FREE_SUCCESS(mAVBufferManager, bufferHandle);
+        return false;
+    }
+
+    // Sleep for the frame duration to simulate real-time frame arrival
+    std::this_thread::sleep_for(std::chrono::milliseconds(frameDurationMs));
+    return true;
 }
 
 bool VideoSinkTest::getSinkPropertyInt(videosink::Property property, int32_t& outValue)
@@ -455,7 +480,8 @@ bool VideoSinkTest::waitForDecoderEndOfStream()
     return false;
 }
 
-void VideoSinkTest::runSink(SinkMode sinkMode)
+/* rdk-halif-aidl 0.23.0: the mode is selected by the vendor and read from the decoder on the first frame */
+void VideoSinkTest::run()
 {
     try
     {
@@ -482,7 +508,7 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
 
         mFirstFramePTS = mTestConfiguration.sink_discardFramesUntilPts;
         mFrameCount = 0;
-        bool isTunnel = (sinkMode == SinkMode::TUNNEL);
+        OperationalMode operationalMode = OperationalMode::NON_TUNNELLED;
 
         while (true)
         {
@@ -511,28 +537,14 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
 
             if (mFrameCount == 1)
             {
-                if (sinkMode == SinkMode::FROM_DECODER)
-                {
-                    /* The decoder is started once it outputs a frame, so its operational mode can be queried now */
-                    sp<IVideoDecoder> videoDecoder;
-                    OperationalMode operationalMode = OperationalMode::NON_TUNNELLED;
-                    if (gVideoDecoderManager != nullptr && gVideoDecoderManager->getVideoDecoder(mDecoderId, &videoDecoder).isOk() &&
-                        videoDecoder != nullptr)
-                    {
-                        VIDEODECODER_GET_OPERATIONALMODE_SUCCESS(videoDecoder, operationalMode);
-                    }
-                    else
-                    {
-                        UT_LOG_ERROR("[SinkID: %d] Unable to get video decoder [%d] to read its operational mode", mSinkId.value, mDecoderId.value);
-                        UT_ASSERT_TRUE(false);
-                    }
-                    isTunnel = (operationalMode == OperationalMode::TUNNELLED);
-                }
-                UT_LOG_INFO("[SinkID: %d] Running %s sink path", mSinkId.value, isTunnel ? "tunnel" : "non-tunnel");
+                /* Get the operational mode of the decoder, which can be queried only after the decoder start */
+                VIDEODECODER_GET_OPERATIONALMODE_SUCCESS(mDecoderHandle, operationalMode);
+                UT_LOG_INFO("[SinkID: %d] Running %s sink path", mSinkId.value,
+                            (operationalMode == OperationalMode::TUNNELLED) ? "tunnel" : "non-tunnel");
 
                 if(mTestConfiguration.sink_discardFramesUntilPts == -1)
                     mFirstFramePTS = decodedFrame.framePTS;
-                else if (isTunnel)
+                else if (operationalMode == OperationalMode::TUNNELLED)
                     mFirstFramePTS = -1;
 
                 if(!decodedFrame.metadata)
@@ -552,8 +564,8 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
 
             /* NON_TUNNELLED: decoded frames are returned with a valid buffer handle and queued to the sink.
              * TUNNELLED: the vendor feeds the sink internally and the frame handle is -1. */
-            if (sinkMode == SinkMode::FROM_DECODER &&
-                ((!isTunnel && bufferHandle == -1) || (isTunnel && bufferHandle != -1)))
+            const bool isTunnel = (operationalMode == OperationalMode::TUNNELLED);
+            if ((!isTunnel && bufferHandle == -1) || (isTunnel && bufferHandle != -1))
             {
                 UT_LOG_ERROR("[SinkID: %d] %s frame received with %s buffer handle, skipping the frame", mSinkId.value,
                              isTunnel ? "Tunnelled" : "Non-tunnelled", isTunnel ? "a valid" : "an invalid");
@@ -583,34 +595,13 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
 
             mSignalEOSPTS = pts;
 
+            if (!queueDecodedFrameIfNonTunnel(decodedFrame, operationalMode, metadata, frameDurationMs))
+            {
+                break;
+            }
             if (isTunnel)
             {
-                continue;
-            }
-
-            // Queue the frame to the video sink
-            bool queueSucess = false;
-
-            if(mTestConfiguration.sink_backpressure)
-            {
-                queueSucess = validateSinkBackPressure(bufferHandle, pts, metadata);
-            }
-            else
-            {
-                VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_SUCCESS(mVideoSinkController, pts, bufferHandle, metadata, queueSucess);
-            }
-
-            if(queueSucess)
-            {
-                // Sleep for the frame duration to simulate real-time frame arrival
-                std::this_thread::sleep_for(std::chrono::milliseconds(frameDurationMs));
-            }
-            else
-            {
-                UT_LOG_ERROR("[SinkID: %d] Failed to queue frame with PTS: %lld", mSinkId.value, pts);
-                UT_ASSERT_TRUE(false);
-                AVBUFFER_FREE_SUCCESS(mAVBufferManager, bufferHandle);
-                break;
+                continue;   // nothing was queued, so the EOS point and underflow checks do not apply
             }
 
             /* Check for end-of-stream */
@@ -640,7 +631,7 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
 
         //TODO: Check if this sleep required.
         // It is added to ensure that the all event is received before validating callbacks and metrics.
-        if (!isTunnel)
+        if (operationalMode == OperationalMode::NON_TUNNELLED)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -651,10 +642,10 @@ void VideoSinkTest::runSink(SinkMode sinkMode)
         tearDownVideoSink();
     }
     catch (const std::exception& ex) {
-        UT_LOG_ERROR("[SinkID: %d] Exception in runSink: %s", mSinkId.value, ex.what());
+        UT_LOG_ERROR("[SinkID: %d] Exception in run: %s", mSinkId.value, ex.what());
         UT_ASSERT_TRUE(false);
     } catch (...) {
-        UT_LOG_ERROR("[SinkID: %d] Unknown exception in runSink", mSinkId.value);
+        UT_LOG_ERROR("[SinkID: %d] Unknown exception in run", mSinkId.value);
         UT_ASSERT_TRUE(false);
     }
 }
