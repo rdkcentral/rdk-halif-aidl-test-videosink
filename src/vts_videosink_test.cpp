@@ -629,6 +629,17 @@ void VideoSinkTest::run()
                     VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_FAILURE(mVideoSinkController, pts, bufferHandle, metadata, Status::EX_ILLEGAL_STATE);
                 }
 
+                /* onEndOfStream() fires after the final frame's presentation time; flushing earlier could discard
+                 * the pending frames before it arrives, so wait for it on both listeners first */
+                if (!mVideoSinkControlListener->waitForEosEvent(std::chrono::milliseconds(5000)) ||
+                    !mVideoSinkEventListener->waitForEosEvent(std::chrono::milliseconds(5000)))
+                {
+                    UT_LOG_ERROR("[SinkID: %d] Sink EOS was not received for EOS at PTS %lld", mSinkId.value, pts);
+                    UT_ASSERT_TRUE(false);
+                    tearDownVideoSink();
+                    return;
+                }
+
                 /* To queue the frames after EOS, flush the video sink */
                 VIDEOSINK_FLUSH_SUCCESS(mVideoSinkController, true);
             }
