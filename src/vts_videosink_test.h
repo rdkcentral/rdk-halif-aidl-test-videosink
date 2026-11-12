@@ -123,7 +123,8 @@ public:
      * decoder's operational mode on the first decoded frame and follows it. */
     void run ();
     /* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
-     * Set false when no plane is mapped: the test then asserts that no first frame rendered arrives. */
+     * true (default, planecontrol maps a plane): exactly one FFR, PTS at or after the first frame.
+     * false (videosink, avclock: no plane mapped): asserts that no first frame rendered arrives. */
     void setFirstFrameRenderedExpected(bool expected) { mFirstFrameRenderedExpected = expected; }
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 

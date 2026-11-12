@@ -239,10 +239,14 @@ void VideoSinkTest::validateCallbacks()
     std::vector<int64_t> controllerFirstFramePTS = mVideoSinkControlListener->getFirstPTS();
     if (mFirstFrameRenderedExpected)
     {
+        /* A plane is mapped (planecontrol): exactly one FFR, for the frame shown once the plane was mapped,
+         * so its PTS is at or after the first frame's PTS (the plane may be mapped after playback starts) */
         UT_ASSERT_EQUAL(eventFirstFramePTS.size(), 1);
-        UT_ASSERT_EQUAL(eventFirstFramePTS.empty() ? -1 : eventFirstFramePTS.front(), mFirstFramePTS);
+        UT_ASSERT_TRUE(!eventFirstFramePTS.empty() && eventFirstFramePTS.front() >= mFirstFramePTS)
+            << "First frame rendered PTS is before the first frame PTS " << mFirstFramePTS;
         UT_ASSERT_EQUAL(controllerFirstFramePTS.size(), 1);
-        UT_ASSERT_EQUAL(controllerFirstFramePTS.empty() ? -1 : controllerFirstFramePTS.front(), mFirstFramePTS);
+        UT_ASSERT_TRUE(!controllerFirstFramePTS.empty() && controllerFirstFramePTS.front() >= mFirstFramePTS)
+            << "First frame rendered PTS is before the first frame PTS " << mFirstFramePTS;
     }
     else
     {

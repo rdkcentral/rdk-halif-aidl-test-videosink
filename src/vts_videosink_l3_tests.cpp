@@ -491,6 +491,10 @@ public:
         }
         mVideoSinkList.clear();
 
+        /* rdk-halif-aidl 0.23.0: release the AV Buffer helper instance taken in SetUp() */
+        releaseAVBufferHelperInstance(mAVbufferHelper);
+        mAVbufferHelper = nullptr;
+
         //TODO: check right place to call joinThreadPool
         //android::IPCThreadState::self()->joinThreadPool();
 
