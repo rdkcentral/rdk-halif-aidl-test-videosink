@@ -94,7 +94,7 @@ public:
     vector<tuple<IVideoSink::Id, sp<IVideoSink>, sp<VideoSinkControllerListener>, sp<VideoSinkEventListener>>> mVideoSinkList;
     vector<tuple<IVideoDecoder::Id, sp<IVideoDecoder>, sp<VideoDecoderControllerListener>, sp<VideoDecoderEventListener>, videodecoder::Capabilities*>> mVideoDecoderList;
     sp<IAVBuffer> mAVBufferManager;
-    IAVBufferHelper* mAVbufferHelper;
+    IAVBufferHelper* mAVbufferHelper = nullptr;
 
     bool isVideoSinkUsable(const IVideoSink::Id& sinkId) const
     {
@@ -491,9 +491,12 @@ public:
         }
         mVideoSinkList.clear();
 
-        /* rdk-halif-aidl 0.23.0: release the AV Buffer helper instance taken in SetUp() */
-        releaseAVBufferHelperInstance(mAVbufferHelper);
-        mAVbufferHelper = nullptr;
+        /* rdk-halif-aidl 0.23.0: release the AV Buffer helper instance taken in SetUp() (null if SetUp() failed early) */
+        if (mAVbufferHelper != nullptr)
+        {
+            releaseAVBufferHelperInstance(mAVbufferHelper);
+            mAVbufferHelper = nullptr;
+        }
 
         //TODO: check right place to call joinThreadPool
         //android::IPCThreadState::self()->joinThreadPool();

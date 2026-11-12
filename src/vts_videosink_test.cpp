@@ -247,6 +247,10 @@ void VideoSinkTest::validateCallbacks()
         UT_ASSERT_EQUAL(controllerFirstFramePTS.size(), 1);
         UT_ASSERT_TRUE(!controllerFirstFramePTS.empty() && controllerFirstFramePTS.front() >= mFirstFramePTS)
             << "First frame rendered PTS is before the first frame PTS " << mFirstFramePTS;
+        /* Both listeners report the same first rendered frame */
+        UT_ASSERT_EQUAL(eventFirstFramePTS.empty() ? -1 : eventFirstFramePTS.front(),
+                        controllerFirstFramePTS.empty() ? -1 : controllerFirstFramePTS.front())
+            << "Event and controller listeners reported different first frame rendered PTS";
     }
     else
     {
