@@ -145,9 +145,7 @@ bool vts_videosink_helper_validatePropertyValue(int sink_id, const std::optional
                 break;
             case PropertyValue::Value::Tag::stringValue:
             {
-                android::String16 string16Val = propVal.get<PropertyValue::Value::Tag::stringValue>();
-                android::String8 string8Val(string16Val);  // Convert String16 to String8
-                val = std::string(string8Val.string());    // Convert String8 to std::string
+                val = propVal.get<PropertyValue::Value::Tag::stringValue>();  // std::string (@utf8InCpp)
             }
                 break;
             case PropertyValue::Value::Tag::booleanValue:

@@ -93,16 +93,19 @@ class VideoSinkTest
 public:
     VideoSinkTest(IVideoSink::Id sinkId,
         sp<IVideoSink> sinkHandle,
+        sp<IVideoDecoder> decoderHandle,
         sp<VideoSinkControllerListener> VideoSinkControllerListener,
         sp<VideoSinkEventListener> VideoSinkEventListner,
         sp<VideoDecoderControllerListener> decoderControllerListener,
         sp<IAVBuffer> AVBufferManager,
         IVideoDecoder::Id decoderId,
         IAVClock::Id clockId,
-        const videoDecoderTestConfiguration_t& config, bool isClockInUse)
+        const videoDecoderTestConfiguration_t& config, bool isClockInUse,
+        bool isPlaneMapped)
     {
         mSinkId = sinkId;
         mSinkHandle = sinkHandle;
+        mDecoderHandle = decoderHandle;
         mVideoSinkControlListener = VideoSinkControllerListener;
         mVideoSinkEventListener = VideoSinkEventListner;
         mDecoderControllerListener = decoderControllerListener;
@@ -115,14 +118,18 @@ public:
         mFirstFramePTS = -1;
         mSignalEOSPTS = -1;
         mFrameCount = 0;
+        mIsPlaneMapped = isPlaneMapped;
     }
 
-    void run ( bool isTunnel );
+    /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor; the sink reads the
+     * decoder's operational mode on the first decoded frame and follows it. */
+    void run ();
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 
 private:
     IVideoSink::Id mSinkId;
     sp<IVideoSink> mSinkHandle;
+    sp<IVideoDecoder> mDecoderHandle;
     sp<VideoSinkControllerListener> mVideoSinkControlListener;
     sp<VideoSinkEventListener> mVideoSinkEventListener;
     sp<VideoDecoderControllerListener> mDecoderControllerListener;
@@ -133,6 +140,9 @@ private:
     sp<IVideoSinkController> mVideoSinkController;
     std::set<int64_t> mReceivedPtsSet;
     bool mIsClockInUse = false;
+    /* rdk-halif-aidl 0.23.0: a video plane is mapped to this sink (planecontrol). Without a plane (videosink, avclock)
+     * no first frame rendered is reported and nothing reaches the display (display metrics are 0). */
+    bool mIsPlaneMapped = false;
     int mActualFramesReceived = 0;
     sp<AVClockControllerListener> mClockCtrlListener;
     sp<IAVClockController> mClockController;
@@ -143,18 +153,18 @@ private:
 
     float getBytesPerPixelMultiplier(const std::string& basePixelFormat, int colorDepth) const;
     PixelFormat getPixelFormatEnum(const std::string& basePixelFormat);
-    void videoSinkNonTunnelMode();
-    void videoSinkTunnelMode();
     void setupClock();
     void tearDownClock();
     void validateCallbacks();
     void validateMetrics();
     bool waitForDecoderEndOfStream();
-    void validateUnderflowResume(int64_t pts);
+    void cleanupVideoDecoder();
     void setupVideoSink();
     void tearDownVideoSink();
     void copyMetaData(const videodecoder::FrameMetadata& src, videodecoder::FrameMetadata& dst);
     bool validateSinkBackPressure(int64_t bufferHandle, int64_t pts, videodecoder::FrameMetadata& metadata);
+    bool queueDecodedFrameIfNonTunnel(const DecodedVideoFrame_t& decodedFrame, OperationalMode operationalMode,
+                                      videodecoder::FrameMetadata& metadata, uint32_t frameDurationMs);
 };
 
 #endif //__VTS_VIDEOSINK_TEST_H__

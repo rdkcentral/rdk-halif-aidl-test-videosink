@@ -1108,6 +1108,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setProperty_neg)
 
         /* Open the sink */
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         // Test Case 4: Set AV_SOURCE from STARTED state
@@ -1134,6 +1135,12 @@ UT_ADD_TEST(VTS_L1_VideoSink, setProperty_neg)
             avSourceValue.value = PropertyValue::Value::make<PropertyValue::Value::Tag::intValue>(avSource);
             VIDEOSINK_SETPROPERTY_FAILURE(videoSinkController,validProperty, avSourceValue,Status::EX_ILLEGAL_STATE);
         }
+
+        // Test Case 5: Set RENDER_FIRST_FRAME from STARTED state (writable in READY only)
+        PropertyValue renderFirstFrameValue;
+        renderFirstFrameValue.value = PropertyValue::Value::make<PropertyValue::Value::Tag::intValue>(1);
+        VIDEOSINK_SETPROPERTY_FAILURE(videoSinkController, videosink::Property::RENDER_FIRST_FRAME,
+                                      renderFirstFrameValue, Status::EX_ILLEGAL_STATE);
 
         /* Stop the sink */
         VIDEOSINK_STOP_SUCCESS(videoSink, videoSinkController, true);
@@ -1233,6 +1240,9 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg)
     std::vector<IVideoSink::Id> sinkIds;
     sp<IVideoSink> videoSink;
     videodecoderIds.push_back(IVideoDecoder::Id::UNDEFINED);
+    // EXTERNAL (-2) is a valid association for a non-HAL source (rdk-halif-aidl 0.23.0), so it must not
+    // be picked as the invalid lower bound below
+    videodecoderIds.push_back(IVideoDecoder::Id::EXTERNAL);
     VIDEOSINK_MANAGER_GETVIDEOSINKIDS(sinkIds);
 
     for (const auto &videoDecoderId : gVideosinks_hfp.availableVideodecoders_hfp)
@@ -1281,6 +1291,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         for (int32_t id : videodecoderIds)
@@ -1318,7 +1329,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, setVideodecoder_neg)
  * | 01 | Check if the controller is in READY state | controller = mControllers[i], isReady = false | status.isOk() = true, isReady = true/false | Should be successful |
  * | 02 | If READY, call getVideosink and verify | controller = mControllers[i], videosinkId = UNDEFINED | status.isOk() = true, videosinkId = UNDEFINED or valid | Should Pass |
  * | 03 | Check if the controller is in STARTED state | controller = mControllers[i], isStarted = false | status.isOk() = true, isStarted = true/false | Should be successful |
- * | 04 | If STARTED, call getVideosink and verify | controller = mControllers[i], videosinkId = UNDEFINED | status.isOk() = true, videosinkId = UNDEFINED or valid | Should Pass |
+ * | 04 | Associate a video decoder, start, call getVideoDecoder and verify | controller = mControllers[i], videodecoderId = decoder set before start | status.isOk() = true, videodecoderId = decoder set before start | Should Pass |
  */
 UT_ADD_TEST(VTS_L1_VideoSink, getVideodecoder_pos)
 {
@@ -1360,11 +1371,13 @@ UT_ADD_TEST(VTS_L1_VideoSink, getVideodecoder_pos)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
         // Test Case 2: Valid State - STARTED
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_CONTROLLER_GETVIDEODECODER_SUCCESS(videoSinkController,videodecoderId);
 
-        UT_ASSERT_EQUAL(videodecoderId.value, IVideoDecoder::Id::UNDEFINED);
+        /* The decoder associated before start() must be reported */
+        UT_ASSERT_EQUAL(videodecoderId.value, VIDEOSINK_DEFAULT_VIDEODECODER_ID());
 
         /* Stop the sink */
         VIDEOSINK_STOP_SUCCESS(videoSink, videoSinkController, true);
@@ -1425,6 +1438,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, start_pos)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Stop the sink */
@@ -1455,7 +1469,8 @@ UT_ADD_TEST(VTS_L1_VideoSink, start_pos)
  * | :----: | --------- | ---------- |-------------- | ----- |
  * | 01 | Check if mControllers is not empty | mControllers | Should be successful | |
  * | 02 | Iterate over each controller in mControllers | controller | Should be successful | |
- * | 03 | Ensure the Video Sink is in a state other than READY by calling start | controller, isStarted = false | status.isOk() = true, isStarted = true | Should be successful |
+ * | 03 | Call start without an associated video decoder (UNDEFINED) | controller | status.exceptionCode() = EX_ILLEGAL_STATE | Should Fail |
+ * | 03a | Associate a video decoder and ensure the Video Sink is in a state other than READY by calling start | controller, videodecoderId = HFP decoder or EXTERNAL | status.isOk() = true, isStarted = true | Should be successful |
  * | 04 | Log the call to start API | | | Should be successful |
  * | 05 | Call start again when the Video Sink is not in READY state | controller, isStarted | status.isOk() = false, status.exceptionCode() = EX_ILLEGAL_STATE | Should Fail |
  * | 06 | Log the result of the start API | | | Should be successful |
@@ -1481,7 +1496,11 @@ UT_ADD_TEST(VTS_L1_VideoSink, start_neg)
         /* Open the sink */
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
+        /* Start without an associated video decoder (UNDEFINED): must be rejected (rdk-halif-aidl 0.23.0) */
+        VIDEOSINK_START_FAILURE(videoSinkController, Status::EX_ILLEGAL_STATE);
+
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Start the sink again */
@@ -1540,6 +1559,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, stop_pos)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Stop the sink */
@@ -1594,6 +1614,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, stop_neg)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Stop the sink */
@@ -1679,6 +1700,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, queueVideoFrame_neg)
 
         VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_FAILURE(videoSinkController, nsPresentationTime, tempFrameBuffer, metadata, Status::EX_ILLEGAL_STATE);
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_FAILURE(videoSinkController, -1, tempFrameBuffer, metadata, Status::EX_ILLEGAL_ARGUMENT);
@@ -1737,6 +1759,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, flush_pos)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Flush the sink with holdLastFrame flag false*/
@@ -1804,6 +1827,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, flush_neg)
         VIDEOSINK_FLUSH_FAILURE(videoSinkController, true, Status::EX_ILLEGAL_STATE);
 
         /* Start the sink */
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         /* Stop the sink */
@@ -1861,6 +1885,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, discardFramesUntil_pos)
         /* Open the sink */
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_SIGNAL_DISCARDFRAMESTILL_SUCCESS(videoSinkController,nsPresentationTime);
@@ -1919,6 +1944,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, discardFramesUntil_neg)
 
         VIDEOSINK_SIGNAL_DISCARDFRAMESTILL_FAILURE(videoSinkController, nsPresentationTime, android::binder::Status::EX_ILLEGAL_STATE);
 
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_SIGNAL_DISCARDFRAMESTILL_FAILURE(videoSinkController, illegalPresentationTime, android::binder::Status::EX_ILLEGAL_ARGUMENT);
@@ -1998,6 +2024,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, attachClock_pos)
             UT_ASSERT_EQUAL(retrievedClockId.value, avclock::IAVClock::Id::UNDEFINED);
 
             // Step 06-09: Test in STARTED state and clock replacement
+            VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
             VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
             VIDEOSINK_ATTACH_CLOCK_SUCCESS(videoSinkController, validClockId);
@@ -2145,6 +2172,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, getClock_pos)
         VIDEOSINK_GET_CLOCK_SUCCESS(videoSinkController, testClockId);
         UT_ASSERT_EQUAL(testClockId.value, avclock::IAVClock::Id::UNDEFINED);
 
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_GET_CLOCK_SUCCESS(videoSinkController, testClockId);
@@ -2205,6 +2233,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, detachClock_pos)
         VIDEOSINK_DETACH_CLOCK_SUCCESS(videoSinkController);
 
         // Step 04: Detach in STARTED state
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         VIDEOSINK_DETACH_CLOCK_SUCCESS(videoSinkController);
@@ -2254,6 +2283,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, signalEndOfStream_pos)
         VIDEOSINK_OPEN_SUCCESS(videoSink, controllerListener, videoSinkController, true);
 
         // Step 03: Start
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
 
         // Step 04: Signal end of stream in STARTED state
@@ -2309,6 +2339,7 @@ UT_ADD_TEST(VTS_L1_VideoSink, signalEndOfStream_neg)
         VIDEOSINK_SIGNAL_EOS_FAILURE(videoSinkController, android::binder::Status::EX_ILLEGAL_STATE);
 
         // Step 04: Start and Stop
+        VIDEOSINK_CONTROLLER_SETDEFAULTVIDEODECODER(videoSinkController);
         VIDEOSINK_START_SUCCESS(videoSink, videoSinkController, true);
         VIDEOSINK_STOP_SUCCESS(videoSink, videoSinkController, true);
 

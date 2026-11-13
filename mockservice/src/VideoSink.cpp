@@ -105,8 +105,17 @@ void notifyStateChangedLocked(int32_t sinkId, State oldState, State newState)
     }
 }
 
+/* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
+ * The mock has no plane control, so no plane is ever mapped and the callback is not reported. */
+static constexpr bool kMockVideoPlaneMapped = false;
+
 void notifyFirstFrameRenderedLocked(int32_t sinkId, int64_t nsPresentationTime)
 {
+    if (!kMockVideoPlaneMapped)
+    {
+        LOG_INFO("onFirstFrameRendered not reported for ID %d: no video plane mapped (PTS %ld)", sinkId, nsPresentationTime);
+        return;
+    }
     if (g_event_listeners[sinkId]) {
         g_event_listeners[sinkId]->onFirstFrameRendered(nsPresentationTime);
     }
@@ -615,6 +624,12 @@ android::binder::Status VideoSinkController::setProperty(videosink::Property pro
         }
         case videosink::Property::RENDER_FIRST_FRAME:
         {
+            if (g_videosink_state[id.value] != State::READY)
+            {
+                LOG_ERROR("setProperty: invalid state %d for RENDER_FIRST_FRAME ID %d", static_cast<int>(g_videosink_state[id.value]), id.value);
+                *_aidl_return = false;
+                return android::binder::Status::fromExceptionCode(android::binder::Status::EX_ILLEGAL_STATE);
+            }
             int32_t intValue = propertyValue.value->get<PropertyValue::Value::Tag::intValue>();
             LOG_INFO("setProperty: RENDER_FIRST_FRAME = %d for ID %d", intValue, id.value);
             if (intValue < 0 || intValue > 1)
@@ -667,7 +682,8 @@ android::binder::Status VideoSinkController::setVideoDecoder(const videodecoder:
         *_aidl_return = false;
         return android::binder::Status::fromExceptionCode(android::binder::Status::EX_ILLEGAL_STATE);
     }
-    if (videoDecoderId.value < -1)
+    /* UNDEFINED (-1) clears the association, EXTERNAL (-2) is a non-HAL source */
+    if (videoDecoderId.value < videodecoder::IVideoDecoder::Id::EXTERNAL)
     {
         LOG_ERROR("setVideoDecoder: invalid videoDecoderId %d for ID %d", videoDecoderId.value, id.value);
         *_aidl_return = false;
@@ -801,6 +817,12 @@ android::binder::Status VideoSinkController::start()
     if (g_videosink_state[id.value] != State::READY)
     {
         LOG_ERROR("start: invalid state %d for ID %d", static_cast<int>(g_videosink_state[id.value]), id.value);
+        return android::binder::Status::fromExceptionCode(android::binder::Status::EX_ILLEGAL_STATE);
+    }
+    /* rdk-halif-aidl 0.23.0: a video decoder (or EXTERNAL) must be associated before start() */
+    if (g_videodecoder_id[id.value].value == videodecoder::IVideoDecoder::Id::UNDEFINED)
+    {
+        LOG_ERROR("start: no video decoder associated for ID %d", id.value);
         return android::binder::Status::fromExceptionCode(android::binder::Status::EX_ILLEGAL_STATE);
     }
     g_videosink_state[id.value] = State::STARTING;
