@@ -100,7 +100,8 @@ public:
         sp<IAVBuffer> AVBufferManager,
         IVideoDecoder::Id decoderId,
         IAVClock::Id clockId,
-        const videoDecoderTestConfiguration_t& config, bool isClockInUse)
+        const videoDecoderTestConfiguration_t& config, bool isClockInUse,
+        bool isPlaneMapped)
     {
         mSinkId = sinkId;
         mSinkHandle = sinkHandle;
@@ -117,15 +118,12 @@ public:
         mFirstFramePTS = -1;
         mSignalEOSPTS = -1;
         mFrameCount = 0;
+        mIsPlaneMapped = isPlaneMapped;
     }
 
     /* rdk-halif-aidl 0.23.0: tunnel / non-tunnel is selected by the vendor; the sink reads the
      * decoder's operational mode on the first decoded frame and follows it. */
     void run ();
-    /* rdk-halif-aidl 0.23.0: onFirstFrameRendered() is reported only once a video plane is mapped.
-     * true (default, planecontrol maps a plane): exactly one FFR, PTS at or after the first frame.
-     * false (videosink, avclock: no plane mapped): asserts that no first frame rendered arrives. */
-    void setFirstFrameRenderedExpected(bool expected) { mFirstFrameRenderedExpected = expected; }
     bool getSinkPropertyInt(videosink::Property property, int32_t& outValue);
 
 private:
@@ -142,7 +140,9 @@ private:
     sp<IVideoSinkController> mVideoSinkController;
     std::set<int64_t> mReceivedPtsSet;
     bool mIsClockInUse = false;
-    bool mFirstFrameRenderedExpected = true;
+    /* rdk-halif-aidl 0.23.0: a video plane is mapped to this sink (planecontrol). Without a plane (videosink, avclock)
+     * no first frame rendered is reported and nothing reaches the display (display metrics are 0). */
+    bool mIsPlaneMapped = false;
     int mActualFramesReceived = 0;
     sp<AVClockControllerListener> mClockCtrlListener;
     sp<IAVClockController> mClockController;
@@ -158,7 +158,7 @@ private:
     void validateCallbacks();
     void validateMetrics();
     bool waitForDecoderEndOfStream();
-    void validateUnderflowResume(int64_t pts);
+    void cleanupVideoDecoder();
     void setupVideoSink();
     void tearDownVideoSink();
     void copyMetaData(const videodecoder::FrameMetadata& src, videodecoder::FrameMetadata& dst);

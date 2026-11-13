@@ -96,9 +96,20 @@ public:
     sp<IAVBuffer> mAVBufferManager;
     IAVBufferHelper* mAVbufferHelper = nullptr;
 
-    bool isVideoSinkUsable(const IVideoSink::Id& sinkId) const
+    /* The sink must be listed in the HFP and, for a secure test, support secure video (same as audiosink isSinkUsable()) */
+    bool isVideoSinkUsable(const IVideoSink::Id& sinkId, bool secure) const
     {
-        return std::find(gVideosinks_hfp.availableVideoSinks_hfp.begin(), gVideosinks_hfp.availableVideoSinks_hfp.end(), sinkId.value) != gVideosinks_hfp.availableVideoSinks_hfp.end();
+        if (std::find(gVideosinks_hfp.availableVideoSinks_hfp.begin(), gVideosinks_hfp.availableVideoSinks_hfp.end(),
+                      sinkId.value) == gVideosinks_hfp.availableVideoSinks_hfp.end())
+        {
+            return false;
+        }
+        if (!secure)
+        {
+            return true;
+        }
+        return std::any_of(gVideosinks_hfp.videosinks_hfp.begin(), gVideosinks_hfp.videosinks_hfp.end(),
+                           [&sinkId](const auto& sink) { return sink.sinkId == sinkId.value && sink.supportsSecure; });
     }
 
     void SetUp() override
@@ -242,7 +253,7 @@ public:
         {
             for (const auto& [_sinkId, sinkHandle, controlListener, eventListener] : mVideoSinkList)
             {
-                if (!isVideoSinkUsable(_sinkId))
+                if (!isVideoSinkUsable(_sinkId, secureDecode))
                 {
                     UT_LOG_INFO("[SinkID: %d] is not usable, skipping.", _sinkId.value);
                     continue;
@@ -260,19 +271,19 @@ public:
                                            decoderEventListener, mAVBufferManager, secureDecode,
                                            decoderConfig, mAVbufferHelper, isSinkAttached);
 
+                // No video plane is mapped (rdk-halif-aidl 0.23.0): no first frame rendered, display metrics are 0
+                const bool isPlaneMapped = false;
                 VideoSinkTest sinkTest(_sinkId, sinkHandle, decoderHandle, controlListener, eventListener,
                                        decoderControlListener, mAVBufferManager, decoderId, clockId, decoderConfig,
-                                       isClockInUse);
+                                       isClockInUse, isPlaneMapped);
 
                 decoderControlListener->resetQueues();
                 decoderEventListener->resetQueues();
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-                std::thread decodeThread(&videoDecoderTest::run, &decodeTest, true);
+                std::thread decodeThread(&videoDecoderTest::run, &decodeTest);
 
-                // No video plane is mapped, so no first frame rendered is expected (rdk-halif-aidl 0.23.0)
-                sinkTest.setFirstFrameRenderedExpected(false);
                 // The sink reads the vendor-selected mode on the first decoded frame and follows it
                 sinkTest.run();
 
@@ -335,7 +346,7 @@ public:
             for (const auto& entry : mVideoSinkList)
             {
                 const auto& [sinkId, sinkHandle, controlListener, eventListener] = entry;
-                if (isVideoSinkUsable(sinkId))
+                if (isVideoSinkUsable(sinkId, secure))
                     availableSinkList.push_back(entry);
             }
 
@@ -367,16 +378,16 @@ public:
                 IAVClock::Id clockId;
                 clockId.value = gVideosinks_hfp.availableClocks_hfp[i];
 
+                const bool isPlaneMapped = false;   // no video plane mapped
                 auto sinkTest = std::make_unique<VideoSinkTest>(_sinkId, videoSink, decoderHandle,
                                     videoSinkControlListener, videoSinkEventListener,
                                     decoderControlListener, mAVBufferManager, decoderId, clockId,
-                                    decoderConfig, isClockInUse);
+                                    decoderConfig, isClockInUse, isPlaneMapped);
 
                 decoderControlListener->resetQueues();
                 decoderEventListener->resetQueues();
 
                 VideoSinkTest* sink = sinkTest.get();
-                sink->setFirstFrameRenderedExpected(false);   // no video plane mapped
                 sinkThreads.emplace_back(&VideoSinkTest::run, sink);
                 sinkTests.push_back(std::move(sinkTest));
             }
@@ -393,7 +404,7 @@ public:
                         sp<IAVBuffer>::cast(mAVBufferManager),
                         secure, decoderConfig, mAVbufferHelper, isSinkAttached);
 
-                decoderThreads.emplace_back(&videoDecoderTest::run, decoderTest.get(), true);
+                decoderThreads.emplace_back(&videoDecoderTest::run, decoderTest.get());
 
                 decoderTests.push_back(move(decoderTest));
             }
