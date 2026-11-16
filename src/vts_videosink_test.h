@@ -157,7 +157,6 @@ private:
     void tearDownClock();
     void validateCallbacks();
     void validateMetrics();
-    bool waitForDecoderEndOfStream();
     void cleanupVideoDecoder();
     void setupVideoSink();
     void tearDownVideoSink();

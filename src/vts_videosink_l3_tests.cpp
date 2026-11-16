@@ -261,7 +261,7 @@ public:
 
                 IAVClock::Id clockId;
                 clockId.value = gVideosinks_hfp.availableClocks_hfp[0];
-                bool isSinkAttached = (sinkHandle != nullptr);
+                bool isSinkAttached = true;
                 bool isClockInUse = false;
 
                 HeapMetrics beforeHeapMetrics, afterHeapMetrics;

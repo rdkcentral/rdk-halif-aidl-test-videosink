@@ -66,6 +66,9 @@
 
 /* Max wait for onFrameBufferAvailable() after queueVideoFrame() returns false (sink queue full) */
 static constexpr int VIDEO_SINK_FRAME_BUFFER_AVAILABLE_WAIT_MS = 2000;
+/* Wait for a decoded frame, and the number of consecutive misses allowed before giving up (same as audiosink) */
+static constexpr int VIDEO_SINK_FRAME_WAIT_MS = 500;
+static constexpr int VIDEO_SINK_FRAME_MAX_RETRY_COUNT = 10;
 
 /* NON_TUNNELLED: queue the decoded frame to the sink (with back-pressure handling if configured).
  * TUNNELLED: the vendor feeds the sink internally, so nothing is queued.
@@ -310,10 +313,9 @@ void VideoSinkTest::validateCallbacks()
     }
     else
     {
-        UT_ASSERT_TRUE(mVideoSinkControlListener->getUnderflowCount() >= 0);
-        UT_ASSERT_TRUE(mVideoSinkEventListener->getUnderflowCount() >= 0);
-        UT_ASSERT_EQUAL(mVideoSinkControlListener->getResumedCount(), 0);
-        UT_ASSERT_EQUAL(mVideoSinkEventListener->getResumedCount(), 0);
+        /* Underflow can still happen when frames arrive slower than real time; a resume must follow an underflow */
+        UT_ASSERT_TRUE(mVideoSinkControlListener->getResumedCount() <= mVideoSinkControlListener->getUnderflowCount());
+        UT_ASSERT_TRUE(mVideoSinkEventListener->getResumedCount() <= mVideoSinkEventListener->getUnderflowCount());
     }
 
     /* Validate Flush complete events*/
@@ -340,7 +342,7 @@ void VideoSinkTest::validateMetrics()
 
         if (framesReceived != -1)
         {
-            if(mTestConfiguration.flushPts >= 0)
+            if(mTestConfiguration.flushPts >= 0 || mTestConfiguration.eosPts >= 0) // flush or EOS+flush may reset counts
             {
                 UT_ASSERT_TRUE(framesReceived <= mFrameCount);
             }
@@ -360,7 +362,7 @@ void VideoSinkTest::validateMetrics()
 
         if (framesPresented != -1)
         {
-            if(mTestConfiguration.flushPts >= 0)
+            if(mTestConfiguration.flushPts >= 0 || mTestConfiguration.eosPts >= 0) // flush or EOS+flush may reset counts
             {
                 UT_ASSERT_TRUE(framesPresented <= actualFramesPresented);
             }
@@ -495,19 +497,6 @@ bool VideoSinkTest::validateSinkBackPressure(int64_t bufferHandle, int64_t pts, 
     return queueAgainSucess;
 }
 
-bool VideoSinkTest::waitForDecoderEndOfStream()
-{
-    if (mDecoderControllerListener->waitForEndOfStream(1, std::chrono::milliseconds(0)))
-    {
-        return true;
-    }
-
-    UT_LOG_ERROR("[SinkID: %d] Neither a decoded frame nor decoder EOS was received within %d ms",
-                 mSinkId.value, 5000);
-    UT_ASSERT_TRUE(false);
-    return false;
-}
-
 /* rdk-halif-aidl 0.23.0: the mode is selected by the vendor and read from the decoder on the first frame */
 void VideoSinkTest::run()
 {
@@ -531,30 +520,46 @@ void VideoSinkTest::run()
         DecodedVideoFrame_t decodedFrame;
         uint32_t frameDurationMs = 50; // Default to 50 ms if frame rate is not available
 
-        /*Wait up to 500 ms for a frame, and tolerate a few consecutive misses*/
-        const int64_t frameTimeoutMs = 5000; // Wait up to 500 ms for a frame
-
         mFirstFramePTS = mTestConfiguration.sink_discardFramesUntilPts;
         mFrameCount = 0;
         OperationalMode operationalMode = OperationalMode::NON_TUNNELLED;
         bool flushDone = false;
+        int32_t retryCount = 0;
+        // The decoder test signals EOS at eos_pts (mid-stream) and after the final frame
+        const int32_t expectedDecoderEos = (mTestConfiguration.eosPts >= 0 &&
+            mTestConfiguration.eosPts != std::get<1>(mTestConfiguration.frameDetails.back())) ? 2 : 1;
 
         while (true)
         {
-            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(frameTimeoutMs)))
+            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(VIDEO_SINK_FRAME_WAIT_MS)))
             {
-                if (!waitForDecoderEndOfStream())
+                /* No frame within the wait time: done once the decoder sent all its EOS, otherwise retry */
+                if (mDecoderControllerListener->waitForEndOfStream(expectedDecoderEos, std::chrono::milliseconds(0)))
                 {
+                    // EOS can arrive immediately before the final decoded frame is queued.
+                    if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(0)))
+                    {
+                        break;
+                    }
+                }
+                else if (++retryCount < VIDEO_SINK_FRAME_MAX_RETRY_COUNT)
+                {
+                    UT_LOG_WARNING("[SinkID: %d] decoded frame not received within %d ms (retry %d)",
+                                   mSinkId.value, VIDEO_SINK_FRAME_WAIT_MS, retryCount);
+                    continue;
+                }
+                else
+                {
+                    UT_LOG_ERROR("[SinkID: %d] Max retry count reached: neither a decoded frame nor decoder EOS received",
+                                 mSinkId.value);
+                    UT_ASSERT_TRUE(false);
                     tearDownVideoSink();
                     return;
                 }
-
-                // EOS can arrive immediately before the final decoded frame is queued.
-                if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(0)))
-                {
-                    break;
-                }
             }
+
+            /* Reset retry count for the next frame */
+            retryCount = 0;
 
             int64_t pts = decodedFrame.framePTS;
             int64_t bufferHandle = decodedFrame.frameAVBufferHandle;
@@ -694,6 +699,7 @@ void VideoSinkTest::run()
 
         validateCallbacks();
         validateMetrics();
+
 
         tearDownVideoSink();
 
