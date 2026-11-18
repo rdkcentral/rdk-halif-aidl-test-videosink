@@ -64,11 +64,10 @@
 
 #include "vts_videosink_test.h"
 
-/* Max wait for onFrameBufferAvailable() after queueVideoFrame() returns false (sink queue full) */
-static constexpr int VIDEO_SINK_FRAME_BUFFER_AVAILABLE_WAIT_MS = 2000;
-/* Wait for a decoded frame, and the number of consecutive misses allowed before giving up (same as audiosink) */
-static constexpr int VIDEO_SINK_FRAME_WAIT_MS = 500;
-static constexpr int VIDEO_SINK_FRAME_MAX_RETRY_COUNT = 10;
+#define MAX_FRAME_WAIT_TIME 500  /* ms — timeout for decoded frame output (must survive flush gaps), same as audiosink */
+#define MAX_RETRY_COUNT 5        /* Maximum number of retries for waiting frames */
+#define MAX_EOS_WAIT_TIME 5000   /* ms — timeout for the sink onEndOfStream() callbacks after the final signalEndOfStream() */
+#define MAX_FRAME_BUFFER_AVAILABLE_WAIT_TIME 2000  /* ms — timeout for onFrameBufferAvailable() after a refused frame */
 
 /* NON_TUNNELLED: queue the decoded frame to the sink (with back-pressure handling if configured).
  * TUNNELLED: the vendor feeds the sink internally, so nothing is queued.
@@ -95,11 +94,12 @@ bool VideoSinkTest::queueDecodedFrameIfNonTunnel(const DecodedVideoFrame_t& deco
         VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_ATTEMPT(mVideoSinkController, pts, bufferHandle, metadata, queueSucess);
         if (!queueSucess)
         {
-            // Queue full (timing at the VTS side): wait for onFrameBufferAvailable() and retry once
+            /* Sink queue full (normal with continuous push): wait for onFrameBufferAvailable() and retry once,
+             * the same way as the audio decoder test handles a refused buffer */
             UT_LOG_WARNING("[SinkID: %d] queueVideoFrame returned false at PTS %lld, waiting for onFrameBufferAvailable before retry",
                            mSinkId.value, static_cast<long long>(pts));
             UT_ASSERT_TRUE(mVideoSinkControlListener->waitForFrameBufferAvailableEvent(
-                std::chrono::milliseconds(VIDEO_SINK_FRAME_BUFFER_AVAILABLE_WAIT_MS)))
+                std::chrono::milliseconds(MAX_FRAME_BUFFER_AVAILABLE_WAIT_TIME)))
                 << "onFrameBufferAvailable not received after a refused frame (PTS " << pts << ")";
             VIDEOSINK_SIGNAL_QUEUEVIDEOFRAME_SUCCESS(mVideoSinkController, pts, bufferHandle, metadata, queueSucess);
         }
@@ -113,8 +113,8 @@ bool VideoSinkTest::queueDecodedFrameIfNonTunnel(const DecodedVideoFrame_t& deco
         return false;
     }
 
-    // Sleep for the frame duration to simulate real-time frame arrival
-    std::this_thread::sleep_for(std::chrono::milliseconds(frameDurationMs));
+    // No sleep: frames are queued as soon as they are decoded, the sink paces them against the clock (same as audiosink)
+    (void)frameDurationMs;
     return true;
 }
 
@@ -531,7 +531,7 @@ void VideoSinkTest::run()
 
         while (true)
         {
-            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(VIDEO_SINK_FRAME_WAIT_MS)))
+            if (!mDecoderControllerListener->getNextFrame(decodedFrame, std::chrono::milliseconds(MAX_FRAME_WAIT_TIME)))
             {
                 /* No frame within the wait time: done once the decoder sent all its EOS, otherwise retry */
                 if (mDecoderControllerListener->waitForEndOfStream(expectedDecoderEos, std::chrono::milliseconds(0)))
@@ -542,16 +542,24 @@ void VideoSinkTest::run()
                         break;
                     }
                 }
-                else if (++retryCount < VIDEO_SINK_FRAME_MAX_RETRY_COUNT)
-                {
-                    UT_LOG_WARNING("[SinkID: %d] decoded frame not received within %d ms (retry %d)",
-                                   mSinkId.value, VIDEO_SINK_FRAME_WAIT_MS, retryCount);
-                    continue;
-                }
                 else
                 {
-                    UT_LOG_ERROR("[SinkID: %d] Max retry count reached: neither a decoded frame nor decoder EOS received",
-                                 mSinkId.value);
+                    /* EOS has not been reached, continue waiting for frames */
+                    retryCount++;
+                    UT_LOG_ERROR("[SinkID: %d] decoded frame not received within %d ms", mSinkId.value, MAX_FRAME_WAIT_TIME);
+
+                    /* Report failure only if test is not underflow test, and only after the first frame
+                     * (the first output includes the decoder start-up latency) */
+                    if (mTestConfiguration.decoderDelay < MAX_FRAME_WAIT_TIME && mFrameCount > 0)
+                    {
+                        UT_ASSERT_TRUE(false);
+                    }
+
+                    if (retryCount < MAX_RETRY_COUNT)
+                    {
+                        continue;
+                    }
+                    UT_LOG_ERROR("[SinkID: %d] Max retry count reached, exiting", mSinkId.value);
                     UT_ASSERT_TRUE(false);
                     tearDownVideoSink();
                     return;
@@ -636,14 +644,8 @@ void VideoSinkTest::run()
                 }
             }
 
-            // Simulate underflow
-            if (mTestConfiguration.sink_underflow_pts >= 0 &&
-                pts == static_cast<int64_t>(mTestConfiguration.sink_underflow_pts))
-            {
-                UT_LOG_DEBUG("[SinkID: %d] Injecting delay at PTS %lld to simulate underflow",
-                             mSinkId.value, static_cast<long long>(pts));
-                std::this_thread::sleep_for(std::chrono::milliseconds(2 * frameDurationMs));
-            }
+            /* Underflow is produced by the decoder delay (delay_between_decode_calls in the test config), same as
+             * audiosink: the frames arrive slower than real time, so the sink queue runs empty */
 
             mSignalEOSPTS = pts;
 
@@ -690,11 +692,14 @@ void VideoSinkTest::run()
         /* Signal EOS, exptected EOS PTS callback is at mSignalEOSPTS */
         VIDEOSINK_SIGNAL_EOS_SUCCESS(mVideoSinkController);
 
-        //TODO: Check if this sleep required.
-        // It is added to ensure that the all event is received before validating callbacks and metrics.
-        if (operationalMode == OperationalMode::NON_TUNNELLED)
+        /* Frames are queued ahead of presentation, so wait until both listeners received every expected
+         * onEndOfStream() (mid-stream EOS + final EOS) before validating, like audiosink getNextEndOfStreamPTS() */
+        const size_t expectedSinkEos = (mTestConfiguration.eosPts >= 0) ? 2 : 1;
+        for (int32_t waitedMs = 0; waitedMs < MAX_EOS_WAIT_TIME &&
+             (mVideoSinkControlListener->getEosPTS().size() < expectedSinkEos ||
+              mVideoSinkEventListener->getEosPTS().size() < expectedSinkEos); waitedMs += 10)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
         validateCallbacks();

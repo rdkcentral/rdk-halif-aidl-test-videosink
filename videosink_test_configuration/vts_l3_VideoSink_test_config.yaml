@@ -119,7 +119,7 @@ videosink:
             sink_underflow_pts: -1
     Sink_Underflow:
       Controls:
-        delay_between_decode_calls: 1
+        delay_between_decode_calls: 100 # Slow decode feed (ms): frames arrive slower than real time, so the sink queue underflows
       Inputs:
         Streams:
           - codec: H264_AVC
