@@ -356,7 +356,8 @@ android::binder::Status VideoSink::getProperty(videosink::Property property, std
             value.value = PropertyValue::Value::make<PropertyValue::Value::intValue>(g_sink_queue_depth[id.value]); // Mock
             break;
         case videosink::Property::METRIC_FRAMES_PRESENTED:
-            value.value = PropertyValue::Value::make<PropertyValue::Value::intValue>(g_sink_queue_depth[id.value] / 2); // Mock
+            /* Frames are presented only on a mapped video plane, and the mock never has one */
+            value.value = PropertyValue::Value::make<PropertyValue::Value::intValue>(kMockVideoPlaneMapped ? g_sink_queue_depth[id.value] / 2 : 0); // Mock
             break;
         case videosink::Property::METRIC_FRAMES_DROPPED_LATE:
             value.value = PropertyValue::Value::make<PropertyValue::Value::intValue>(0); // Mock
